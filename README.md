@@ -1,2 +1,8 @@
 # Optimizing-Talent-Acquisition-and-Onboarding-Vector-team-
-An IT tools that simplifies resume screening, automates onboarding steps, and equips new hires to be productive from day one
+Project Title: Optimizing Talent Acquisition and Onboarding
+Vectorian:
+1) Tang Yen Sin
+2) Lee Shy Woei
+3) Keh Ban Ning
+4) Tee Onn Min
+5) Chong Ming Li

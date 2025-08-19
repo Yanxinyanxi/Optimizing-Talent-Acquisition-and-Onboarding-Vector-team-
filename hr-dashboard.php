@@ -311,10 +311,10 @@ if ($_POST && isset($_POST['update_status'])) {
             </div>
             <div class="card-body">
                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                    <a href="candidate-upload.php" class="btn btn-primary" style="padding: 1.5rem; text-align: center;">
+                    <!-- <a href="candidate-upload.php" class="btn btn-primary" style="padding: 1.5rem; text-align: center;">
                         📤 Upload Resume<br>
                         <small>Add new candidate</small>
-                    </a>
+                    </a> -->
                     <button onclick="exportApplications()" class="btn btn-secondary" style="padding: 1.5rem; text-align: center;">
                         📊 Export Data<br>
                         <small>Download applications</small>

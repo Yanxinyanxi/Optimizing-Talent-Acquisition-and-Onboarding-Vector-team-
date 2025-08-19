@@ -1,30 +1,6 @@
 <?php
 require_once 'db.php';
-require_once 'config.php'; // Add this for API configuration
-
-// Generate random password for new candidates
-function generatePassword($length = 8) {
-    $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    $password = '';
-    for ($i = 0; $i < $length; $i++) {
-        $password .= $characters[rand(0, strlen($characters) - 1)];
-    }
-    return $password;
-}
-
-// Create new user account
-function createUser($username, $email, $password, $full_name, $role = 'candidate') {
-    global $pdo;
-    
-    try {
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
-        return $stmt->execute([$username, $email, $hashed_password, $full_name, $role]);
-    } catch(PDOException $e) {
-        error_log('Error creating user: ' . $e->getMessage());
-        return false;
-    }
-}
+require_once 'config.php';
 
 // Enhanced file upload function for resumes
 function uploadResume($file, $candidate_id, $job_position_id) {
@@ -94,10 +70,10 @@ function uploadResume($file, $candidate_id, $job_position_id) {
  * @return array - Parsed resume data or error
  */
 function parseResumeWithExtracta($file_path, $candidate_id, $job_position_id) {
-    // Your Extracta.ai API credentials from config
-    $api_key = 'MTk4NzAwNDMxOQ==_2sz09qx0ic73vk30ts32uq';
-$extraction_id = '-OY-tgWlYrpfUxqIQqWr';
-$api_url = 'https://api.extracta.ai/api/v1' . $extraction_id . '/extract';
+    // Use constants from config.php
+    $api_key = EXTRACTA_API_KEY;
+    $extraction_id = EXTRACTA_EXTRACTION_ID;
+    $api_url = 'https://api.extracta.ai/api/v1/' . $extraction_id . '/extract';
 
     try {
         // Check if file exists
@@ -116,7 +92,7 @@ $api_url = 'https://api.extracta.ai/api/v1' . $extraction_id . '/extract';
         // Initialize cURL
         $curl = curl_init();
         
-        // Set cURL options
+        // Set cURL options using constants from config
         curl_setopt_array($curl, [
             CURLOPT_URL => $api_url,
             CURLOPT_RETURNTRANSFER => true,
@@ -594,33 +570,6 @@ function saveChatMessage($user_id, $session_id, $message, $response) {
     } catch(PDOException $e) {
         error_log('Error saving chat message: ' . $e->getMessage());
         return false;
-    }
-}
-
-// Check if user is logged in
-function isLoggedIn() {
-    return isset($_SESSION['user_id']) && isset($_SESSION['username']);
-}
-
-// Check if user has specific role
-function hasRole($role) {
-    return isset($_SESSION['role']) && $_SESSION['role'] === $role;
-}
-
-// Redirect if not logged in
-function requireLogin() {
-    if (!isLoggedIn()) {
-        header('Location: index.php');
-        exit();
-    }
-}
-
-// Redirect if doesn't have required role
-function requireRole($role) {
-    requireLogin();
-    if (!hasRole($role)) {
-        header('Location: dashboard.php');
-        exit();
     }
 }
 ?>

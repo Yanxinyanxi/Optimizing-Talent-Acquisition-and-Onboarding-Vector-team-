@@ -28,23 +28,26 @@ function requireRole($role) {
     }
 }
 
-// Login function
+// Login function - FIXED to use MySQLi instead of PDO
 function login($username, $password) {
-    global $pdo;
+    global $connection; // Changed from $pdo to $connection
     
     try {
-        $stmt = $pdo->prepare("SELECT id, username, email, password, full_name, role FROM users WHERE username = ? AND status = 'active'");
-        $stmt->execute([$username]);
-        $user = $stmt->fetch();
+        // MySQLi prepared statement instead of PDO
+        $stmt = $connection->prepare("SELECT id, username, email, password, full_name, role FROM users WHERE username = ? AND status = 'active'");
+        $stmt->bind_param("s", $username);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $user = $result->fetch_assoc();
 
         // DEBUG: Add these lines temporarily
         echo "<pre>";
         echo "Debug Info:\n";
-        echo "Username entered: " . $username . "\n";
-        echo "Password entered: " . $password . "\n";
+        echo "Username entered: " . htmlspecialchars($username) . "\n";
+        echo "Password entered: " . htmlspecialchars($password) . "\n";
         echo "User found: " . ($user ? 'YES' : 'NO') . "\n";
         if ($user) {
-            echo "Stored hash: " . $user['password'] . "\n";
+            echo "Stored hash: " . htmlspecialchars($user['password']) . "\n";
             echo "Password verify result: " . (password_verify($password, $user['password']) ? 'TRUE' : 'FALSE') . "\n";
         }
         echo "</pre>";
@@ -59,7 +62,8 @@ function login($username, $password) {
             return true;
         }
         return false;
-    } catch(PDOException $e) {
+    } catch(Exception $e) {
+        error_log("Login error: " . $e->getMessage());
         return false;
     }
 }
@@ -71,15 +75,17 @@ function logout() {
     exit;
 }
 
-// Create new user account
+// Create new user account - FIXED to use MySQLi
 function createUser($username, $email, $password, $full_name, $role = 'candidate') {
-    global $pdo;
+    global $connection; // Changed from $pdo to $connection
     
     try {
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $pdo->prepare("INSERT INTO users (username, email, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
-        return $stmt->execute([$username, $email, $hashed_password, $full_name, $role]);
-    } catch(PDOException $e) {
+        $stmt = $connection->prepare("INSERT INTO users (username, email, password, full_name, role) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param("sssss", $username, $email, $hashed_password, $full_name, $role);
+        return $stmt->execute();
+    } catch(Exception $e) {
+        error_log("Create user error: " . $e->getMessage());
         return false;
     }
 }

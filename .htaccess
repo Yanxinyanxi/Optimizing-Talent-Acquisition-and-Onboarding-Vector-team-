@@ -1,0 +1,2 @@
+# Force index.php as the default landing page
+DirectoryIndex index.php

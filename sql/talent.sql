@@ -160,6 +160,32 @@ CREATE TABLE chatbot_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+-- Updated parsed_resumes table to match your Extracta.ai extraction fields
+-- Run this in phpMyAdmin to update your existing table
+
+-- Drop the existing table if it exists (CAUTION: This will delete existing data)
+-- DROP TABLE IF EXISTS `parsed_resumes`;
+
+-- Create new table structure matching your extraction fields
+CREATE TABLE IF NOT EXISTS `parsed_resumes` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `original_filename` varchar(255) NOT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `email` varchar(255) DEFAULT NULL,
+  `phone` varchar(50) DEFAULT NULL,
+  `address` varchar(500) DEFAULT NULL,
+  `linkedin` varchar(500) DEFAULT NULL,
+  `github` varchar(500) DEFAULT NULL,
+  `work_experience` longtext,
+  `education` longtext,
+  `languages` text,
+  `skills` text,
+  `certificates` text,
+  `raw_data` longtext,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- ====================================
 -- INSERT SAMPLE DATA
 -- ====================================

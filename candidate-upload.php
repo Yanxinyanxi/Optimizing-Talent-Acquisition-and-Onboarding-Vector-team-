@@ -46,44 +46,86 @@ if ($_POST && isset($_POST['submit_application'])) {
             $upload_result = uploadResume($_FILES['resume'], $candidate_id, $job_position_id);
             
             if ($upload_result['success']) {
-                // Parse resume (mock implementation)
-                $parsed_data = parseResume($upload_result['path']);
-                
-                // Get job requirements for match calculation
-                $stmt = $pdo->prepare("SELECT required_skills FROM job_positions WHERE id = ?");
-                $stmt->execute([$job_position_id]);
-                $job = $stmt->fetch();
-                
-                // Calculate match percentage
-                $match_percentage = calculateMatchPercentage($parsed_data['skills'], $job['required_skills']);
-                
-                // Save application
+                // First, save the application with pending status
                 $stmt = $pdo->prepare("
                     INSERT INTO applications 
-                    (candidate_id, job_position_id, resume_filename, resume_path, extracted_skills, 
-                     extracted_experience, extracted_education, extracted_contact, match_percentage, api_processing_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')
+                    (candidate_id, job_position_id, resume_filename, resume_path, 
+                     api_processing_status, match_percentage)
+                    VALUES (?, ?, ?, ?, 'processing', 0.00)
                 ");
                 
-                $result = $stmt->execute([
+                $stmt->execute([
                     $candidate_id,
                     $job_position_id,
                     $upload_result['filename'],
-                    $upload_result['path'],
-                    $parsed_data['skills'],
-                    $parsed_data['experience'],
-                    $parsed_data['education'],
-                    $parsed_data['contact'],
-                    $match_percentage
+                    $upload_result['path']
                 ]);
                 
-                if ($result) {
-                    $success = "Application submitted successfully! Your match score is {$match_percentage}%. You will be contacted if selected for an interview.";
+                $application_id = $pdo->lastInsertId();
+                
+                // Parse resume using Extracta.ai API
+                $parsed_data = parseResume($upload_result['path'], $candidate_id, $job_position_id);
+                
+                if ($parsed_data['success']) {
+                    // Get job requirements for match calculation
+                    $stmt = $pdo->prepare("SELECT required_skills FROM job_positions WHERE id = ?");
+                    $stmt->execute([$job_position_id]);
+                    $job = $stmt->fetch();
                     
-                    // Clear form data
-                    $_POST = [];
+                    // Calculate match percentage
+                    $match_percentage = calculateMatchPercentage($parsed_data['skills'], $job['required_skills']);
+                    
+                    // Update application with parsed data
+                    $stmt = $pdo->prepare("
+                        UPDATE applications SET 
+                        api_response = ?,
+                        extracted_skills = ?, 
+                        extracted_experience = ?, 
+                        extracted_education = ?, 
+                        extracted_contact = ?, 
+                        match_percentage = ?,
+                        api_processing_status = 'completed',
+                        api_error_message = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    ");
+                    
+                    $result = $stmt->execute([
+                        $parsed_data['api_response'],
+                        $parsed_data['skills'],
+                        $parsed_data['experience'],
+                        $parsed_data['education'],
+                        $parsed_data['contact'],
+                        $match_percentage,
+                        $application_id
+                    ]);
+                    
+                    if ($result) {
+                        $success = "🎉 Application submitted successfully! Your AI-powered match score is <strong>{$match_percentage}%</strong>. " .
+                                 "Our advanced resume parsing system has analyzed your qualifications. You will be contacted if selected for an interview.";
+                        
+                        // Clear form data
+                        $_POST = [];
+                    } else {
+                        $error = 'Failed to save parsed resume data. Please try again.';
+                    }
+                    
                 } else {
-                    $error = 'Failed to save application. Please try again.';
+                    // API parsing failed, but we still have the application
+                    $error_message = isset($parsed_data['error']) ? $parsed_data['error'] : 'Resume parsing failed';
+                    
+                    // Update application with error status
+                    $stmt = $pdo->prepare("
+                        UPDATE applications SET 
+                        api_processing_status = 'failed',
+                        api_error_message = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$error_message, $application_id]);
+                    
+                    $error = "⚠️ Application submitted, but our AI parsing system encountered an issue: {$error_message}. " .
+                           "Your application has been saved and will be reviewed manually by our HR team.";
                 }
                 
             } else {
@@ -92,6 +134,7 @@ if ($_POST && isset($_POST['submit_application'])) {
             
         } catch(Exception $e) {
             $error = 'An error occurred: ' . $e->getMessage();
+            error_log('Candidate Upload Error: ' . $e->getMessage());
         }
     }
 }
@@ -194,6 +237,54 @@ if (isLoggedIn() && hasRole('candidate')) {
             border-radius: var(--border-radius);
             border: 1px solid var(--success-color);
         }
+        
+        .processing-indicator {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+            background: rgba(255, 193, 7, 0.1);
+            border: 1px solid #ffc107;
+            border-radius: var(--border-radius);
+            margin-top: 1rem;
+        }
+        
+        .processing-indicator.show {
+            display: block;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .alert-success {
+            background-color: rgba(40, 167, 69, 0.1);
+            border: 1px solid #28a745;
+            color: #155724;
+            padding: 1rem;
+            border-radius: var(--border-radius);
+            margin-bottom: 1rem;
+        }
+        
+        .alert-danger {
+            background-color: rgba(220, 53, 69, 0.1);
+            border: 1px solid #dc3545;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: var(--border-radius);
+            margin-bottom: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -230,11 +321,11 @@ if (isLoggedIn() && hasRole('candidate')) {
 
     <div class="container">
         <?php if ($error): ?>
-            <div class="alert alert-danger"><?php echo htmlspecialchars($error); ?></div>
+            <div class="alert alert-danger"><?php echo $error; ?></div>
         <?php endif; ?>
 
         <?php if ($success): ?>
-            <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+            <div class="alert alert-success"><?php echo $success; ?></div>
         <?php endif; ?>
 
         <form method="POST" enctype="multipart/form-data" id="application-form">
@@ -323,13 +414,22 @@ if (isLoggedIn() && hasRole('candidate')) {
                         <h4 style="margin-bottom: 0.5rem; color: var(--success-color);">✅ File Selected</h4>
                         <div id="file-details"></div>
                     </div>
+                    
+                    <!-- Processing Indicator -->
+                    <div id="processing-indicator" class="processing-indicator">
+                        <div class="loading-spinner"></div>
+                        <strong>🤖 AI Processing Your Resume...</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #6c757d;">
+                            Our advanced AI system is analyzing your resume for skills, experience, and qualifications. This may take a few moments.
+                        </p>
+                    </div>
                 </div>
             </div>
 
             <!-- AI Processing Info -->
             <div class="card">
                 <div class="card-header">
-                    <i>🤖</i> AI-Powered Analysis
+                    <i>🤖</i> AI-Powered Analysis by Extracta.ai
                 </div>
                 <div class="card-body">
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
@@ -337,23 +437,29 @@ if (isLoggedIn() && hasRole('candidate')) {
                             <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
                             <strong>Skill Extraction</strong>
                             <p style="color: #6c757d; font-size: 0.9rem; margin: 0;">
-                                AI analyzes your resume to identify technical and soft skills
+                                AI analyzes your resume to identify technical and soft skills automatically
                             </p>
                         </div>
                         <div style="text-align: center; padding: 1rem;">
                             <div style="font-size: 2rem; margin-bottom: 0.5rem;">📊</div>
                             <strong>Match Scoring</strong>
                             <p style="color: #6c757d; font-size: 0.9rem; margin: 0;">
-                                Calculate compatibility percentage with job requirements
+                                Calculate compatibility percentage with job requirements in real-time
                             </p>
                         </div>
                         <div style="text-align: center; padding: 1rem;">
                             <div style="font-size: 2rem; margin-bottom: 0.5rem;">⚡</div>
                             <strong>Instant Results</strong>
                             <p style="color: #6c757d; font-size: 0.9rem; margin: 0;">
-                                Get immediate feedback on your application status
+                                Get immediate feedback on your application status and match score
                             </p>
                         </div>
+                    </div>
+                    
+                    <div style="background: rgba(255, 107, 53, 0.05); padding: 1rem; border-radius: var(--border-radius); margin-top: 1rem;">
+                        <p style="margin: 0; color: #6c757d; font-size: 0.9rem; text-align: center;">
+                            <strong>🔒 Powered by Extracta.ai</strong> - Industry-leading resume parsing technology with advanced NLP and machine learning algorithms
+                        </p>
                     </div>
                 </div>
             </div>
@@ -381,12 +487,16 @@ if (isLoggedIn() && hasRole('candidate')) {
                         <p style="margin: 0.5rem 0 0 0; color: #6c757d;">We accept PDF, DOC, and DOCX files up to 5MB in size.</p>
                     </div>
                     <div>
+                        <strong style="color: var(--secondary-color);">How does the AI parsing work?</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #6c757d;">Our system uses Extracta.ai's advanced NLP technology to automatically extract skills, experience, education, and contact information from your resume.</p>
+                    </div>
+                    <div>
                         <strong style="color: var(--secondary-color);">How long does the review process take?</strong>
                         <p style="margin: 0.5rem 0 0 0; color: #6c757d;">Our AI system provides instant analysis. HR team reviews applications within 3-5 business days.</p>
                     </div>
                     <div>
-                        <strong style="color: var(--secondary-color);">What happens after I submit my application?</strong>
-                        <p style="margin: 0.5rem 0 0 0; color: #6c757d;">You'll receive an immediate match score. If selected, our HR team will contact you for the next steps.</p>
+                        <strong style="color: var(--secondary-color);">What happens if the AI parsing fails?</strong>
+                        <p style="margin: 0.5rem 0 0 0; color: #6c757d;">Your application will still be saved and reviewed manually by our HR team. We ensure no application is lost due to technical issues.</p>
                     </div>
                     <div>
                         <strong style="color: var(--secondary-color);">Can I apply for multiple positions?</strong>
@@ -465,7 +575,7 @@ if (isLoggedIn() && hasRole('candidate')) {
                 }
             });
 
-            // Form validation
+            // Form validation and submission
             document.getElementById('application-form').addEventListener('submit', function(e) {
                 if (!selectedJobId) {
                     e.preventDefault();
@@ -480,10 +590,19 @@ if (isLoggedIn() && hasRole('candidate')) {
                     return;
                 }
                 
+                // Show processing indicator
+                document.getElementById('processing-indicator').classList.add('show');
+                
                 // Show loading state
                 const submitBtn = document.getElementById('submit-btn');
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = '<div class="loading"></div> Processing Application...';
+                submitBtn.innerHTML = '<div class="loading-spinner"></div> Processing Application...';
+                
+                // Scroll to processing indicator
+                document.getElementById('processing-indicator').scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                });
             });
 
             // Add event listeners for form fields
@@ -506,6 +625,9 @@ if (isLoggedIn() && hasRole('candidate')) {
                 <p><strong>File:</strong> ${fileName}</p>
                 <p><strong>Size:</strong> ${fileSize} MB</p>
                 <p><strong>Type:</strong> ${file.type}</p>
+                <p style="color: var(--primary-color); font-size: 0.9rem;">
+                    <strong>🤖 Ready for AI Analysis:</strong> Your resume will be processed by our advanced parsing system upon submission.
+                </p>
             `;
             
             fileInfo.style.display = 'block';
@@ -514,7 +636,7 @@ if (isLoggedIn() && hasRole('candidate')) {
             const uploadArea = document.getElementById('upload-area');
             uploadArea.innerHTML = `
                 <div class="upload-icon" style="color: var(--success-color);">✅</div>
-                <h3 style="margin-bottom: 0.5rem; color: var(--success-color);">File Ready</h3>
+                <h3 style="margin-bottom: 0.5rem; color: var(--success-color);">File Ready for Processing</h3>
                 <p style="color: #6c757d; margin-bottom: 1rem;">${fileName}</p>
                 <button type="button" class="btn btn-outline" onclick="document.getElementById('resume-input').click()">
                     Change File
@@ -532,10 +654,10 @@ if (isLoggedIn() && hasRole('candidate')) {
             
             if (hasJob && hasFile && hasName && hasEmail) {
                 submitBtn.disabled = false;
-                submitBtn.textContent = '🚀 Submit Application';
+                submitBtn.innerHTML = '🚀 Submit Application & Start AI Analysis';
             } else {
                 submitBtn.disabled = true;
-                submitBtn.textContent = '🚀 Submit Application (Complete all fields)';
+                submitBtn.innerHTML = '🚀 Complete all fields to submit';
             }
         }
     </script>

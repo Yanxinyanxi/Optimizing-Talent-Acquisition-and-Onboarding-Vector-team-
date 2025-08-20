@@ -20,6 +20,8 @@ CREATE TABLE users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+
+
 -- ====================================
 -- 2. JOB POSITIONS TABLE
 -- ====================================
@@ -160,6 +162,32 @@ CREATE TABLE chatbot_settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+-- Updated parsed_resumes table to match your Extracta.ai extraction fields
+-- Run this in phpMyAdmin to update your existing table
+
+-- Drop the existing table if it exists (CAUTION: This will delete existing data)
+-- DROP TABLE IF EXISTS `parsed_resumes`;
+
+-- Create new table structure matching your extraction fields
+CREATE TABLE IF NOT EXISTS `parsed_resumes` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `original_filename` varchar(255) NOT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `email` varchar(255) DEFAULT NULL,
+  `phone` varchar(50) DEFAULT NULL,
+  `address` varchar(500) DEFAULT NULL,
+  `linkedin` varchar(500) DEFAULT NULL,
+  `github` varchar(500) DEFAULT NULL,
+  `work_experience` longtext,
+  `education` longtext,
+  `languages` text,
+  `skills` text,
+  `certificates` text,
+  `raw_data` longtext,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 -- ====================================
 -- INSERT SAMPLE DATA
 -- ====================================
@@ -265,21 +293,3 @@ CREATE TABLE chatbot_settings (
     description TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
-
--- Get all applications with candidate and job details
--- SELECT a.*, u.full_name as candidate_name, j.title as job_title 
--- FROM applications a 
--- JOIN users u ON a.candidate_id = u.id 
--- JOIN job_positions j ON a.job_position_id = j.id;
-
--- Get onboarding progress for an employee
--- SELECT t.task_name, eo.status, eo.completed_at 
--- FROM employee_onboarding eo 
--- JOIN onboarding_tasks t ON eo.task_id = t.id 
--- WHERE eo.employee_id = ?;
-
--- Calculate onboarding completion percentage
--- SELECT 
---     (COUNT(CASE WHEN eo.status = 'completed' THEN 1 END) * 100.0 / COUNT(*)) as completion_percentage
--- FROM employee_onboarding eo 
--- WHERE eo.employee_id = ?;

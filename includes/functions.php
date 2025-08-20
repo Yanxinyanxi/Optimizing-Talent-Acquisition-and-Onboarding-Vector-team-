@@ -1,55 +1,334 @@
 <?php
 require_once 'db.php';
+// require_once 'config.php';
 
-// File upload function for resumes
-function uploadResume($file, $candidate_id, $job_id) {
-    $target_dir = "uploads/resumes/";
-    $file_extension = strtolower(pathinfo($file["name"], PATHINFO_EXTENSION));
+// Initialize PDO connection for functions that need it
+try {
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch(PDOException $e) {
+    die("PDO Connection failed: " . $e->getMessage());
+}
+
+// Enhanced file upload function for resumes
+function uploadResume($file, $candidate_id, $job_position_id) {
+    $upload_dir = 'uploads/resumes/';
+    $max_file_size = 5 * 1024 * 1024; // 5MB
+    $allowed_types = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
     
-    // Validate file type
-    $allowed_types = ['pdf', 'doc', 'docx'];
-    if (!in_array($file_extension, $allowed_types)) {
-        return ['success' => false, 'message' => 'Only PDF, DOC, and DOCX files are allowed.'];
-    }
-    
-    // Validate file size (5MB max)
-    if ($file["size"] > 5000000) {
-        return ['success' => false, 'message' => 'File size must be less than 5MB.'];
-    }
-    
-    // Create unique filename
-    $filename = "resume_" . $candidate_id . "_" . $job_id . "_" . time() . "." . $file_extension;
-    $target_file = $target_dir . $filename;
-    
-    // Create directory if it doesn't exist
-    if (!file_exists($target_dir)) {
-        mkdir($target_dir, 0777, true);
-    }
-    
-    if (move_uploaded_file($file["tmp_name"], $target_file)) {
+    try {
+        // Create upload directory if it doesn't exist
+        if (!is_dir($upload_dir)) {
+            if (!mkdir($upload_dir, 0755, true)) {
+                throw new Exception('Failed to create upload directory');
+            }
+        }
+        
+        // Validate file
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            throw new Exception('File upload error: ' . $file['error']);
+        }
+        
+        if ($file['size'] > $max_file_size) {
+            throw new Exception('File size too large. Maximum 5MB allowed.');
+        }
+        
+        // Check file type by MIME type (more secure than extension)
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $mime_type = finfo_file($finfo, $file['tmp_name']);
+        finfo_close($finfo);
+        
+        if (!in_array($mime_type, $allowed_types)) {
+            throw new Exception('Invalid file type. Only PDF, DOC, and DOCX files are allowed.');
+        }
+        
+        // Generate unique filename
+        $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+        $safe_filename = 'resume_' . $candidate_id . '_' . $job_position_id . '_' . time() . '.' . $file_extension;
+        $file_path = $upload_dir . $safe_filename;
+        
+        // Move uploaded file
+        if (!move_uploaded_file($file['tmp_name'], $file_path)) {
+            throw new Exception('Failed to save uploaded file');
+        }
+        
         return [
-            'success' => true, 
-            'filename' => $filename, 
-            'path' => $target_file
+            'success' => true,
+            'filename' => $safe_filename,
+            'path' => $file_path,
+            'message' => 'Resume uploaded successfully'
         ];
-    } else {
-        return ['success' => false, 'message' => 'Failed to upload file.'];
+        
+    } catch (Exception $e) {
+        error_log('Resume upload error: ' . $e->getMessage());
+        return [
+            'success' => false,
+            'filename' => '',
+            'path' => '',
+            'message' => $e->getMessage()
+        ];
     }
 }
 
-// Simple resume parsing (placeholder for API integration)
-function parseResume($file_path) {
-    // For now, return mock data
-    // In real implementation, call external API here
+/**
+ * Parse resume using Extracta.ai API
+ * @param string $file_path - Path to the uploaded resume file
+ * @param int $candidate_id - ID of the candidate
+ * @param int $job_position_id - ID of the job position
+ * @return array - Parsed resume data or error
+ */
+function parseResumeWithExtracta($file_path, $candidate_id, $job_position_id) {
+    // Use constants from config.php
+    $api_key = EXTRACTA_API_KEY;
+    $extraction_id = EXTRACTA_EXTRACTION_ID;
+    $api_url = 'https://api.extracta.ai/api/v1/' . $extraction_id . '/extract';
+
+    try {
+        // Check if file exists
+        if (!file_exists($file_path)) {
+            throw new Exception('Resume file not found: ' . $file_path);
+        }
+        
+        // Prepare the file for upload
+        $file_data = new CURLFile($file_path, mime_content_type($file_path), basename($file_path));
+        
+        // Prepare the POST data
+        $post_data = [
+            'file' => $file_data
+        ];
+        
+        // Initialize cURL
+        $curl = curl_init();
+        
+        // Set cURL options using constants from config
+        curl_setopt_array($curl, [
+            CURLOPT_URL => $api_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $post_data,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $api_key,
+                'Accept: application/json'
+            ],
+            CURLOPT_TIMEOUT => API_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => API_CONNECT_TIMEOUT,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_FOLLOWLOCATION => true
+        ]);
+        
+        // Execute the request
+        $response = curl_exec($curl);
+        $http_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $curl_error = curl_error($curl);
+        
+        curl_close($curl);
+        
+        // Check for cURL errors
+        if ($curl_error) {
+            throw new Exception('cURL Error: ' . $curl_error);
+        }
+        
+        // Check HTTP status code
+        if ($http_code !== 200) {
+            throw new Exception('API Error: HTTP ' . $http_code . ' - ' . $response);
+        }
+        
+        // Parse the JSON response
+        $api_response = json_decode($response, true);
+        
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new Exception('Invalid JSON response: ' . json_last_error_msg());
+        }
+        
+        // Update application status in database
+        updateApplicationApiStatus($candidate_id, $job_position_id, 'completed', $response, null);
+        
+        // Process and return the parsed data
+        return processExtractaResponse($api_response);
+        
+    } catch (Exception $e) {
+        // Log the error and update database
+        error_log('Extracta API Error: ' . $e->getMessage());
+        updateApplicationApiStatus($candidate_id, $job_position_id, 'failed', null, $e->getMessage());
+        
+        // Return fallback data
+        return [
+            'success' => false,
+            'error' => $e->getMessage(),
+            'skills' => '',
+            'experience' => '',
+            'education' => '',
+            'contact' => json_encode(['email' => '', 'phone' => '']),
+            'api_response' => null
+        ];
+    }
+}
+
+/**
+ * Process Extracta.ai API response and format for database storage
+ * @param array $api_response - Raw API response from Extracta
+ * @return array - Formatted data for database
+ */
+function processExtractaResponse($api_response) {
+    // Initialize default values
+    $processed_data = [
+        'success' => true,
+        'skills' => '',
+        'experience' => '',
+        'education' => '',
+        'contact' => json_encode(['email' => '', 'phone' => '']),
+        'api_response' => json_encode($api_response)
+    ];
+    
+    try {
+        // Extract skills - try multiple possible paths in the response
+        if (isset($api_response['skills']) && is_array($api_response['skills'])) {
+            $skills = array_map('trim', $api_response['skills']);
+            $processed_data['skills'] = implode(', ', $skills);
+        } elseif (isset($api_response['data']['skills'])) {
+            $skills = is_array($api_response['data']['skills']) 
+                ? $api_response['data']['skills'] 
+                : explode(',', $api_response['data']['skills']);
+            $processed_data['skills'] = implode(', ', array_map('trim', $skills));
+        } elseif (isset($api_response['extracted_data']['skills'])) {
+            $skills = is_array($api_response['extracted_data']['skills']) 
+                ? $api_response['extracted_data']['skills'] 
+                : explode(',', $api_response['extracted_data']['skills']);
+            $processed_data['skills'] = implode(', ', array_map('trim', $skills));
+        }
+        
+        // Extract experience
+        if (isset($api_response['experience']) && is_array($api_response['experience'])) {
+            $experience_entries = [];
+            foreach ($api_response['experience'] as $exp) {
+                if (is_array($exp)) {
+                    $entry = [];
+                    if (isset($exp['company'])) $entry[] = 'Company: ' . $exp['company'];
+                    if (isset($exp['position'])) $entry[] = 'Position: ' . $exp['position'];
+                    if (isset($exp['duration'])) $entry[] = 'Duration: ' . $exp['duration'];
+                    if (isset($exp['description'])) $entry[] = 'Description: ' . $exp['description'];
+                    $experience_entries[] = implode(' | ', $entry);
+                } else {
+                    $experience_entries[] = $exp;
+                }
+            }
+            $processed_data['experience'] = implode("\n\n", $experience_entries);
+        } elseif (isset($api_response['data']['experience'])) {
+            $processed_data['experience'] = is_string($api_response['data']['experience']) 
+                ? $api_response['data']['experience'] 
+                : json_encode($api_response['data']['experience']);
+        } elseif (isset($api_response['work_experience'])) {
+            $processed_data['experience'] = is_string($api_response['work_experience']) 
+                ? $api_response['work_experience'] 
+                : json_encode($api_response['work_experience']);
+        }
+        
+        // Extract education
+        if (isset($api_response['education']) && is_array($api_response['education'])) {
+            $education_entries = [];
+            foreach ($api_response['education'] as $edu) {
+                if (is_array($edu)) {
+                    $entry = [];
+                    if (isset($edu['institution'])) $entry[] = 'Institution: ' . $edu['institution'];
+                    if (isset($edu['degree'])) $entry[] = 'Degree: ' . $edu['degree'];
+                    if (isset($edu['field'])) $entry[] = 'Field: ' . $edu['field'];
+                    if (isset($edu['year'])) $entry[] = 'Year: ' . $edu['year'];
+                    $education_entries[] = implode(' | ', $entry);
+                } else {
+                    $education_entries[] = $edu;
+                }
+            }
+            $processed_data['education'] = implode("\n\n", $education_entries);
+        } elseif (isset($api_response['data']['education'])) {
+            $processed_data['education'] = is_string($api_response['data']['education']) 
+                ? $api_response['data']['education'] 
+                : json_encode($api_response['data']['education']);
+        }
+        
+        // Extract contact information
+        $contact_info = ['email' => '', 'phone' => ''];
+        
+        if (isset($api_response['contact'])) {
+            if (isset($api_response['contact']['email'])) {
+                $contact_info['email'] = $api_response['contact']['email'];
+            }
+            if (isset($api_response['contact']['phone'])) {
+                $contact_info['phone'] = $api_response['contact']['phone'];
+            }
+        } elseif (isset($api_response['data']['contact'])) {
+            $contact_data = $api_response['data']['contact'];
+            if (isset($contact_data['email'])) {
+                $contact_info['email'] = $contact_data['email'];
+            }
+            if (isset($contact_data['phone'])) {
+                $contact_info['phone'] = $contact_data['phone'];
+            }
+        }
+        
+        // Also check for email and phone at root level
+        if (isset($api_response['email'])) {
+            $contact_info['email'] = $api_response['email'];
+        }
+        if (isset($api_response['phone'])) {
+            $contact_info['phone'] = $api_response['phone'];
+        }
+        
+        $processed_data['contact'] = json_encode($contact_info);
+        
+    } catch (Exception $e) {
+        error_log('Error processing Extracta response: ' . $e->getMessage());
+    }
+    
+    return $processed_data;
+}
+
+/**
+ * Update application API processing status in database
+ * @param int $candidate_id
+ * @param int $job_position_id  
+ * @param string $status
+ * @param string|null $api_response
+ * @param string|null $error_message
+ */
+function updateApplicationApiStatus($candidate_id, $job_position_id, $status, $api_response = null, $error_message = null) {
+    global $pdo;
+    
+    try {
+        $sql = "UPDATE applications SET 
+                api_processing_status = ?, 
+                api_response = ?, 
+                api_error_message = ?, 
+                updated_at = CURRENT_TIMESTAMP 
+                WHERE candidate_id = ? AND job_position_id = ?";
+        
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$status, $api_response, $error_message, $candidate_id, $job_position_id]);
+        
+    } catch (Exception $e) {
+        error_log('Error updating application API status: ' . $e->getMessage());
+    }
+}
+
+// Updated parseResume function to use Extracta.ai API
+function parseResume($file_path, $candidate_id = null, $job_position_id = null) {
+    // Use Extracta.ai API if candidate and job IDs are provided
+    if ($candidate_id && $job_position_id) {
+        return parseResumeWithExtracta($file_path, $candidate_id, $job_position_id);
+    }
+    
+    // Fallback to mock data if API fails or IDs not provided
     $mock_skills = [
         'PHP', 'JavaScript', 'MySQL', 'HTML', 'CSS', 'Laravel', 'React', 'Node.js'
     ];
     
     return [
+        'success' => true,
         'skills' => implode(', ', array_slice($mock_skills, 0, rand(3, 6))),
         'experience' => rand(1, 10) . ' years',
         'education' => 'Bachelor\'s Degree in Computer Science',
-        'contact' => json_encode(['email' => 'candidate@example.com', 'phone' => '+60123456789'])
+        'contact' => json_encode(['email' => 'candidate@example.com', 'phone' => '+60123456789']),
+        'api_response' => null
     ];
 }
 
@@ -68,51 +347,198 @@ function calculateMatchPercentage($resume_skills, $job_skills) {
     return round(($matches / $total_required) * 100, 2);
 }
 
-// Get all job positions
+// Get job positions
 function getJobPositions() {
-    global $pdo;
-    $stmt = $pdo->query("SELECT * FROM job_positions WHERE status = 'active' ORDER BY created_at DESC");
-    return $stmt->fetchAll();
+    global $connection;
+    
+    try {
+        $sql = "SELECT id, title, department, status FROM job_positions WHERE status = 'active' ORDER BY title";
+        $result = $connection->query($sql);
+        return $result->fetch_all(MYSQLI_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching job positions: " . $e->getMessage());
+        return [];
+    }
 }
 
-// Get applications for HR dashboard
+// Get all applications for HR dashboard
 function getApplicationsForHR($job_id = null) {
-    global $pdo;
+    global $connection;
     
-    $sql = "SELECT a.*, u.full_name as candidate_name, u.email as candidate_email, 
-                   j.title as job_title, j.department
-            FROM applications a 
-            JOIN users u ON a.candidate_id = u.id 
-            JOIN job_positions j ON a.job_position_id = j.id";
-    
-    if ($job_id) {
-        $sql .= " WHERE a.job_position_id = ?";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$job_id]);
-    } else {
+    try {
+        $sql = "
+            SELECT 
+                a.id,
+                a.status,
+                a.match_percentage,
+                a.applied_at,
+                a.hr_notes,
+                a.resume_filename,
+                u.full_name as candidate_name,
+                u.email as candidate_email,
+                j.title as job_title,
+                j.department
+            FROM applications a
+            LEFT JOIN users u ON a.candidate_id = u.id
+            LEFT JOIN job_positions j ON a.job_position_id = j.id
+        ";
+        
+        if ($job_id) {
+            $sql .= " WHERE a.job_position_id = ?";
+        }
+        
         $sql .= " ORDER BY a.applied_at DESC";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute();
+        
+        if ($job_id) {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("i", $job_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+        } else {
+            $result = $connection->query($sql);
+        }
+        
+        return $result->fetch_all(MYSQLI_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching applications: " . $e->getMessage());
+        return [];
     }
-    
-    return $stmt->fetchAll();
 }
 
 // Update application status
 function updateApplicationStatus($application_id, $status, $notes = '') {
-    global $pdo;
+    global $connection;
     
     try {
-        $stmt = $pdo->prepare("UPDATE applications SET status = ?, hr_notes = ?, updated_at = NOW() WHERE id = ?");
-        $result = $stmt->execute([$status, $notes, $application_id]);
+        $stmt = $connection->prepare("UPDATE applications SET status = ?, hr_notes = ?, updated_at = NOW() WHERE id = ?");
+        $stmt->bind_param("ssi", $status, $notes, $application_id);
+        return $stmt->execute();
+    } catch (Exception $e) {
+        error_log("Error updating application status: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Get user by username
+function getUserByUsername($username) {
+    global $connection;
+    
+    try {
+        $stmt = $connection->prepare("SELECT * FROM users WHERE username = ?");
+        $stmt->bind_param("s", $username);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->fetch_assoc();
+    } catch (Exception $e) {
+        error_log("Error fetching user: " . $e->getMessage());
+        return null;
+    }
+}
+
+// Create new user
+function createUser($username, $password, $email, $full_name, $role = 'candidate') {
+    global $connection;
+    
+    try {
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+        $stmt = $connection->prepare("INSERT INTO users (username, password, email, full_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', NOW())");
+        $stmt->bind_param("sssss", $username, $hashed_password, $email, $full_name, $role);
+        return $stmt->execute();
+    } catch (Exception $e) {
+        error_log("Error creating user: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Sanitize input
+function sanitizeInput($input) {
+    return htmlspecialchars(trim($input), ENT_QUOTES, 'UTF-8');
+}
+
+// Format date for display
+function formatDate($date, $format = 'M j, Y') {
+    return date($format, strtotime($date));
+}
+
+// Get application statistics
+function getApplicationStats() {
+    global $connection;
+    
+    try {
+        $stats = [];
         
-        // If status is 'hired', create employee account
-        if ($result && $status === 'hired') {
-            createEmployeeFromApplication($application_id);
+        // Total applications
+        $result = $connection->query("SELECT COUNT(*) as total FROM applications");
+        $stats['total'] = $result->fetch_assoc()['total'];
+        
+        // Pending applications
+        $result = $connection->query("SELECT COUNT(*) as pending FROM applications WHERE status = 'pending'");
+        $stats['pending'] = $result->fetch_assoc()['pending'];
+        
+        // Hired candidates
+        $result = $connection->query("SELECT COUNT(*) as hired FROM applications WHERE status = 'hired'");
+        $stats['hired'] = $result->fetch_assoc()['hired'];
+        
+        // Active employees
+        $result = $connection->query("SELECT COUNT(*) as employees FROM users WHERE role = 'employee' AND status = 'active'");
+        $stats['employees'] = $result->fetch_assoc()['employees'];
+        
+        return $stats;
+    } catch (Exception $e) {
+        error_log("Error fetching stats: " . $e->getMessage());
+        return [
+            'total' => 0,
+            'pending' => 0,
+            'hired' => 0,
+            'employees' => 0
+        ];
+    }
+}
+
+// Check if username exists
+function usernameExists($username, $exclude_id = null) {
+    global $connection;
+    
+    try {
+        $sql = "SELECT id FROM users WHERE username = ?";
+        if ($exclude_id) {
+            $sql .= " AND id != ?";
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("si", $username, $exclude_id);
+        } else {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("s", $username);
         }
         
-        return $result;
-    } catch(PDOException $e) {
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->num_rows > 0;
+    } catch (Exception $e) {
+        error_log("Error checking username: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Check if email exists
+function emailExists($email, $exclude_id = null) {
+    global $connection;
+    
+    try {
+        $sql = "SELECT id FROM users WHERE email = ?";
+        if ($exclude_id) {
+            $sql .= " AND id != ?";
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("si", $email, $exclude_id);
+        } else {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("s", $email);
+        }
+        
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->num_rows > 0;
+    } catch (Exception $e) {
+        error_log("Error checking email: " . $e->getMessage());
         return false;
     }
 }
@@ -136,16 +562,17 @@ function createEmployeeFromApplication($application_id) {
             $stmt = $pdo->prepare("UPDATE users SET role = 'employee' WHERE id = ?");
             $stmt->execute([$app['candidate_id']]);
             
-            // Assign onboarding tasks
+            // Assign onboarding tasks (if tables exist)
             assignOnboardingTasks($app['candidate_id'], $app['department']);
             
-            // Assign training modules
+            // Assign training modules (if tables exist)
             assignTrainingModules($app['candidate_id'], $app['department']);
             
             return true;
         }
         return false;
     } catch(PDOException $e) {
+        error_log('Error creating employee from application: ' . $e->getMessage());
         return false;
     }
 }
@@ -155,6 +582,12 @@ function assignOnboardingTasks($employee_id, $department) {
     global $pdo;
     
     try {
+        // Check if onboarding_tasks table exists
+        $stmt = $pdo->query("SHOW TABLES LIKE 'onboarding_tasks'");
+        if ($stmt->rowCount() == 0) {
+            return true; // Table doesn't exist, skip
+        }
+        
         $stmt = $pdo->prepare("SELECT id FROM onboarding_tasks WHERE department = 'ALL' OR department = ? ORDER BY order_sequence");
         $stmt->execute([$department]);
         $tasks = $stmt->fetchAll();
@@ -166,6 +599,7 @@ function assignOnboardingTasks($employee_id, $department) {
         
         return true;
     } catch(PDOException $e) {
+        error_log('Error assigning onboarding tasks: ' . $e->getMessage());
         return false;
     }
 }
@@ -175,6 +609,12 @@ function assignTrainingModules($employee_id, $department) {
     global $pdo;
     
     try {
+        // Check if training_modules table exists
+        $stmt = $pdo->query("SHOW TABLES LIKE 'training_modules'");
+        if ($stmt->rowCount() == 0) {
+            return true; // Table doesn't exist, skip
+        }
+        
         $stmt = $pdo->prepare("SELECT id FROM training_modules WHERE department = 'ALL' OR department = ?");
         $stmt->execute([$department]);
         $modules = $stmt->fetchAll();
@@ -186,6 +626,7 @@ function assignTrainingModules($employee_id, $department) {
         
         return true;
     } catch(PDOException $e) {
+        error_log('Error assigning training modules: ' . $e->getMessage());
         return false;
     }
 }
@@ -194,29 +635,39 @@ function assignTrainingModules($employee_id, $department) {
 function getOnboardingProgress($employee_id) {
     global $pdo;
     
-    $stmt = $pdo->prepare("
-        SELECT t.task_name, t.description, eo.status, eo.completed_at, t.order_sequence
-        FROM employee_onboarding eo 
-        JOIN onboarding_tasks t ON eo.task_id = t.id 
-        WHERE eo.employee_id = ? 
-        ORDER BY t.order_sequence
-    ");
-    $stmt->execute([$employee_id]);
-    return $stmt->fetchAll();
+    try {
+        $stmt = $pdo->prepare("
+            SELECT t.task_name, t.description, eo.status, eo.completed_at, t.order_sequence
+            FROM employee_onboarding eo 
+            JOIN onboarding_tasks t ON eo.task_id = t.id 
+            WHERE eo.employee_id = ? 
+            ORDER BY t.order_sequence
+        ");
+        $stmt->execute([$employee_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        error_log('Error getting onboarding progress: ' . $e->getMessage());
+        return [];
+    }
 }
 
 // Get training modules for employee
 function getTrainingModules($employee_id) {
     global $pdo;
     
-    $stmt = $pdo->prepare("
-        SELECT tm.module_name, tm.description, tm.duration_hours, et.status, et.progress_percentage
-        FROM employee_training et 
-        JOIN training_modules tm ON et.module_id = tm.id 
-        WHERE et.employee_id = ?
-    ");
-    $stmt->execute([$employee_id]);
-    return $stmt->fetchAll();
+    try {
+        $stmt = $pdo->prepare("
+            SELECT tm.module_name, tm.description, tm.duration_hours, et.status, et.progress_percentage
+            FROM employee_training et 
+            JOIN training_modules tm ON et.module_id = tm.id 
+            WHERE et.employee_id = ?
+        ");
+        $stmt->execute([$employee_id]);
+        return $stmt->fetchAll();
+    } catch(PDOException $e) {
+        error_log('Error getting training modules: ' . $e->getMessage());
+        return [];
+    }
 }
 
 // Update onboarding task status
@@ -228,6 +679,7 @@ function updateTaskStatus($employee_id, $task_id, $status) {
         $stmt = $pdo->prepare("UPDATE employee_onboarding SET status = ?, completed_at = $completed_at WHERE employee_id = ? AND task_id = ?");
         return $stmt->execute([$status, $employee_id, $task_id]);
     } catch(PDOException $e) {
+        error_log('Error updating task status: ' . $e->getMessage());
         return false;
     }
 }
@@ -253,6 +705,7 @@ function getChatbotResponse($user_message) {
             return $default ? $default['setting_value'] : "I'm sorry, I couldn't understand your question. Please contact HR for assistance.";
         }
     } catch(PDOException $e) {
+        error_log('Chatbot error: ' . $e->getMessage());
         return "I'm experiencing technical difficulties. Please contact HR for assistance.";
     }
 }
@@ -270,6 +723,7 @@ function saveChatMessage($user_id, $session_id, $message, $response) {
         
         return true;
     } catch(PDOException $e) {
+        error_log('Error saving chat message: ' . $e->getMessage());
         return false;
     }
 }

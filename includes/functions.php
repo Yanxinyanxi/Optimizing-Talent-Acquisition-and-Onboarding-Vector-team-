@@ -1,6 +1,15 @@
 <?php
 require_once 'db.php';
-require_once 'config.php';
+// require_once 'config.php';
+
+// Initialize PDO connection for functions that need it
+try {
+    $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+} catch(PDOException $e) {
+    die("PDO Connection failed: " . $e->getMessage());
+}
 
 // Enhanced file upload function for resumes
 function uploadResume($file, $candidate_id, $job_position_id) {
@@ -338,52 +347,198 @@ function calculateMatchPercentage($resume_skills, $job_skills) {
     return round(($matches / $total_required) * 100, 2);
 }
 
-// Get all job positions
+// Get job positions
 function getJobPositions() {
-    global $pdo;
-    $stmt = $pdo->query("SELECT * FROM job_positions WHERE status = 'active' ORDER BY created_at DESC");
-    return $stmt->fetchAll();
+    global $connection;
+    
+    try {
+        $sql = "SELECT id, title, department, status FROM job_positions WHERE status = 'active' ORDER BY title";
+        $result = $connection->query($sql);
+        return $result->fetch_all(MYSQLI_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching job positions: " . $e->getMessage());
+        return [];
+    }
 }
 
-// Get applications for HR dashboard
+// Get all applications for HR dashboard
 function getApplicationsForHR($job_id = null) {
-    global $pdo;
+    global $connection;
     
-    $sql = "SELECT a.*, u.full_name as candidate_name, u.email as candidate_email, 
-                   j.title as job_title, j.department
-            FROM applications a 
-            JOIN users u ON a.candidate_id = u.id 
-            JOIN job_positions j ON a.job_position_id = j.id";
-    
-    if ($job_id) {
-        $sql .= " WHERE a.job_position_id = ?";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute([$job_id]);
-    } else {
+    try {
+        $sql = "
+            SELECT 
+                a.id,
+                a.status,
+                a.match_percentage,
+                a.applied_at,
+                a.hr_notes,
+                a.resume_filename,
+                u.full_name as candidate_name,
+                u.email as candidate_email,
+                j.title as job_title,
+                j.department
+            FROM applications a
+            LEFT JOIN users u ON a.candidate_id = u.id
+            LEFT JOIN job_positions j ON a.job_position_id = j.id
+        ";
+        
+        if ($job_id) {
+            $sql .= " WHERE a.job_position_id = ?";
+        }
+        
         $sql .= " ORDER BY a.applied_at DESC";
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute();
+        
+        if ($job_id) {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("i", $job_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+        } else {
+            $result = $connection->query($sql);
+        }
+        
+        return $result->fetch_all(MYSQLI_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching applications: " . $e->getMessage());
+        return [];
     }
-    
-    return $stmt->fetchAll();
 }
 
 // Update application status
 function updateApplicationStatus($application_id, $status, $notes = '') {
-    global $pdo;
+    global $connection;
     
     try {
-        $stmt = $pdo->prepare("UPDATE applications SET status = ?, hr_notes = ?, updated_at = NOW() WHERE id = ?");
-        $result = $stmt->execute([$status, $notes, $application_id]);
+        $stmt = $connection->prepare("UPDATE applications SET status = ?, hr_notes = ?, updated_at = NOW() WHERE id = ?");
+        $stmt->bind_param("ssi", $status, $notes, $application_id);
+        return $stmt->execute();
+    } catch (Exception $e) {
+        error_log("Error updating application status: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Get user by username
+function getUserByUsername($username) {
+    global $connection;
+    
+    try {
+        $stmt = $connection->prepare("SELECT * FROM users WHERE username = ?");
+        $stmt->bind_param("s", $username);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->fetch_assoc();
+    } catch (Exception $e) {
+        error_log("Error fetching user: " . $e->getMessage());
+        return null;
+    }
+}
+
+// Create new user
+function createUser($username, $password, $email, $full_name, $role = 'candidate') {
+    global $connection;
+    
+    try {
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+        $stmt = $connection->prepare("INSERT INTO users (username, password, email, full_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', NOW())");
+        $stmt->bind_param("sssss", $username, $hashed_password, $email, $full_name, $role);
+        return $stmt->execute();
+    } catch (Exception $e) {
+        error_log("Error creating user: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Sanitize input
+function sanitizeInput($input) {
+    return htmlspecialchars(trim($input), ENT_QUOTES, 'UTF-8');
+}
+
+// Format date for display
+function formatDate($date, $format = 'M j, Y') {
+    return date($format, strtotime($date));
+}
+
+// Get application statistics
+function getApplicationStats() {
+    global $connection;
+    
+    try {
+        $stats = [];
         
-        // If status is 'hired', create employee account
-        if ($result && $status === 'hired') {
-            createEmployeeFromApplication($application_id);
+        // Total applications
+        $result = $connection->query("SELECT COUNT(*) as total FROM applications");
+        $stats['total'] = $result->fetch_assoc()['total'];
+        
+        // Pending applications
+        $result = $connection->query("SELECT COUNT(*) as pending FROM applications WHERE status = 'pending'");
+        $stats['pending'] = $result->fetch_assoc()['pending'];
+        
+        // Hired candidates
+        $result = $connection->query("SELECT COUNT(*) as hired FROM applications WHERE status = 'hired'");
+        $stats['hired'] = $result->fetch_assoc()['hired'];
+        
+        // Active employees
+        $result = $connection->query("SELECT COUNT(*) as employees FROM users WHERE role = 'employee' AND status = 'active'");
+        $stats['employees'] = $result->fetch_assoc()['employees'];
+        
+        return $stats;
+    } catch (Exception $e) {
+        error_log("Error fetching stats: " . $e->getMessage());
+        return [
+            'total' => 0,
+            'pending' => 0,
+            'hired' => 0,
+            'employees' => 0
+        ];
+    }
+}
+
+// Check if username exists
+function usernameExists($username, $exclude_id = null) {
+    global $connection;
+    
+    try {
+        $sql = "SELECT id FROM users WHERE username = ?";
+        if ($exclude_id) {
+            $sql .= " AND id != ?";
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("si", $username, $exclude_id);
+        } else {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("s", $username);
         }
         
-        return $result;
-    } catch(PDOException $e) {
-        error_log('Error updating application status: ' . $e->getMessage());
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->num_rows > 0;
+    } catch (Exception $e) {
+        error_log("Error checking username: " . $e->getMessage());
+        return false;
+    }
+}
+
+// Check if email exists
+function emailExists($email, $exclude_id = null) {
+    global $connection;
+    
+    try {
+        $sql = "SELECT id FROM users WHERE email = ?";
+        if ($exclude_id) {
+            $sql .= " AND id != ?";
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("si", $email, $exclude_id);
+        } else {
+            $stmt = $connection->prepare($sql);
+            $stmt->bind_param("s", $email);
+        }
+        
+        $stmt->execute();
+        $result = $stmt->get_result();
+        return $result->num_rows > 0;
+    } catch (Exception $e) {
+        error_log("Error checking email: " . $e->getMessage());
         return false;
     }
 }

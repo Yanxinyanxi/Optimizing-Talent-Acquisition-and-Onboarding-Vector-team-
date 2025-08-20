@@ -20,68 +20,178 @@ $processing = false;
 $success = false;
 $error = '';
 $parsed_data = null;
+$application_created = false;
+
+// Fetch active job positions for dropdown
+$job_positions = [];
+try {
+    $job_query = "SELECT id, title, department, description, required_skills, experience_level FROM job_positions WHERE status = 'active' ORDER BY title ASC";
+    $job_result = $connection->query($job_query);
+    if ($job_result) {
+        while ($row = $job_result->fetch_assoc()) {
+            $job_positions[] = $row;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Error fetching job positions: " . $e->getMessage());
+}
 
 // Check if form was submitted
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
     $processing = true;
     
-    $upload_dir = 'uploads/resumes/';
-    $allowed_types = array('pdf', 'doc', 'docx');
-    $max_size = 5 * 1024 * 1024; // 5MB
-    
-    $file = $_FILES['resume'];
-    $file_name = $file['name'];
-    $file_tmp = $file['tmp_name'];
-    $file_size = $file['size'];
-    $file_error = $file['error'];
-    
-    // Get file extension
-    $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
-    
-    // Validate file
-    if ($file_error !== UPLOAD_ERR_OK) {
-        $error = "Upload error occurred.";
-        $processing = false;
-    } elseif (!in_array($file_ext, $allowed_types)) {
-        $error = "Only PDF, DOC, and DOCX files are allowed.";
-        $processing = false;
-    } elseif ($file_size > $max_size) {
-        $error = "File size must be less than 5MB.";
+    // Validate job position selection
+    $selected_job_id = isset($_POST['job_position']) ? (int)$_POST['job_position'] : 0;
+    if ($selected_job_id <= 0) {
+        $error = "Please select a job position to apply for.";
         $processing = false;
     } else {
-        // Generate unique filename
-        $new_filename = uniqid() . '_' . time() . '.' . $file_ext;
-        $file_path = $upload_dir . $new_filename;
+        // Verify job position exists and is active
+        $job_check_stmt = $connection->prepare("SELECT id, title FROM job_positions WHERE id = ? AND status = 'active'");
+        $job_check_stmt->bind_param("i", $selected_job_id);
+        $job_check_stmt->execute();
+        $job_check_result = $job_check_stmt->get_result();
         
-        // Move uploaded file
-        if (move_uploaded_file($file_tmp, $file_path)) {
+        if ($job_check_result->num_rows === 0) {
+            $error = "Selected job position is not available.";
+            $processing = false;
+        } else {
+            $selected_job = $job_check_result->fetch_assoc();
             
-            // Initialize Extracta API
-            $extracta = new ExtractaAPI(EXTRACTA_API_KEY, EXTRACTA_EXTRACTION_ID);
+            // Check if candidate has already applied for this job
+            $existing_app_stmt = $connection->prepare("SELECT id FROM applications WHERE candidate_id = ? AND job_position_id = ?");
+            $existing_app_stmt->bind_param("ii", $_SESSION['user_id'], $selected_job_id);
+            $existing_app_stmt->execute();
+            $existing_app_result = $existing_app_stmt->get_result();
             
-            $parsed_result = $extracta->parseResume($file_path);
-            
-            if (isset($parsed_result['error'])) {
-                $error = "Error parsing resume: " . $parsed_result['error'];
-            } elseif (isset($parsed_result['success']) && $parsed_result['success']) {
-                // Parse was successful
-                $parsed_data = $parsed_result['data'];
-                
-                // Save parsed data to database
-                if ($extracta->saveParsedData($parsed_data, $file_name, $connection)) {
-                    $success = true;
-                } else {
-                    $error = "Resume parsed but failed to save to database.";
-                }
-            } else {
-                $error = "Unexpected response from API.";
+            if ($existing_app_result->num_rows > 0) {
+                $error = "You have already applied for this position: " . htmlspecialchars($selected_job['title']);
+                $processing = false;
+            }
+        }
+    }
+    
+    if (!$error) {
+        $upload_dir = 'uploads/resumes/';
+        $allowed_types = array('pdf', 'doc', 'docx');
+        $max_size = 5 * 1024 * 1024; // 5MB
+        
+        $file = $_FILES['resume'];
+        $file_name = $file['name'];
+        $file_tmp = $file['tmp_name'];
+        $file_size = $file['size'];
+        $file_error = $file['error'];
+        
+        // Get file extension
+        $file_ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+        
+        // Validate file
+        if ($file_error !== UPLOAD_ERR_OK) {
+            $error = "Upload error occurred.";
+            $processing = false;
+        } elseif (!in_array($file_ext, $allowed_types)) {
+            $error = "Only PDF, DOC, and DOCX files are allowed.";
+            $processing = false;
+        } elseif ($file_size > $max_size) {
+            $error = "File size must be less than 5MB.";
+            $processing = false;
+        } else {
+            // Create upload directory if it doesn't exist
+            if (!file_exists($upload_dir)) {
+                mkdir($upload_dir, 0755, true);
             }
             
-        } else {
-            $error = "Failed to upload file.";
+            // Generate unique filename
+            $new_filename = uniqid() . '_' . time() . '.' . $file_ext;
+            $file_path = $upload_dir . $new_filename;
+            
+            // Move uploaded file
+            if (move_uploaded_file($file_tmp, $file_path)) {
+                
+                // Initialize Extracta API
+                $extracta = new ExtractaAPI(EXTRACTA_API_KEY, EXTRACTA_EXTRACTION_ID);
+                
+                $parsed_result = $extracta->parseResume($file_path);
+                
+                if (isset($parsed_result['error'])) {
+                    $error = "Error parsing resume: " . $parsed_result['error'];
+                } elseif (isset($parsed_result['success']) && $parsed_result['success']) {
+                    // Parse was successful
+                    $parsed_data = $parsed_result['data'];
+                    
+                    // Start transaction for saving both parsed data and application
+                    $connection->begin_transaction();
+                    
+                    try {
+                        // Save parsed data to parsed_resumes table
+                        if ($extracta->saveParsedData($parsed_data, $file_name, $connection)) {
+                            
+                            // Create application entry
+                            $app_stmt = $connection->prepare("
+                                INSERT INTO applications (
+                                    candidate_id, 
+                                    job_position_id, 
+                                    resume_filename, 
+                                    resume_path,
+                                    api_response,
+                                    extracted_skills,
+                                    extracted_experience,
+                                    extracted_education,
+                                    extracted_contact,
+                                    api_processing_status,
+                                    status
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'pending')
+                            ");
+                            
+                            // Prepare data for application
+                            $api_response = json_encode($parsed_data);
+                            $skills = isset($parsed_data['skills']) ? json_encode($parsed_data['skills']) : null;
+                            $experience = isset($parsed_data['work_experience']) ? json_encode($parsed_data['work_experience']) : null;
+                            $education = isset($parsed_data['education']) ? json_encode($parsed_data['education']) : null;
+                            $contact = isset($parsed_data['personal_info']) ? json_encode($parsed_data['personal_info']) : null;
+                            
+                            $app_stmt->bind_param("iisssssss", 
+    $_SESSION['user_id'],
+    $selected_job_id,
+    $file_name,
+    $file_path,
+    $api_response,
+    $skills,
+    $experience,
+    $education,
+    $contact
+);
+                            
+                            if ($app_stmt->execute()) {
+                                $connection->commit();
+                                $success = true;
+                                $application_created = true;
+                            } else {
+                                $connection->rollback();
+                                $error = "Resume parsed but failed to create application.";
+                            }
+                            
+                        } else {
+                            $connection->rollback();
+                            $error = "Failed to save parsed resume data.";
+                        }
+                        
+                    } catch (Exception $e) {
+                        $connection->rollback();
+                        $error = "Database error: " . $e->getMessage();
+                        error_log("Application creation error: " . $e->getMessage());
+                    }
+                    
+                } else {
+                    $error = "Unexpected response from API.";
+                }
+                
+            } else {
+                $error = "Failed to upload file.";
+            }
         }
-        $processing = false;
     }
+    $processing = false;
 }
 ?>
 
@@ -275,6 +385,87 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             padding: 2rem;
         }
         
+        /* Job Selection */
+        .job-selection {
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: rgba(43, 76, 140, 0.05);
+            border-radius: 12px;
+            border-left: 3px solid var(--secondary-color);
+        }
+        
+        .job-selection label {
+            display: block;
+            font-weight: 600;
+            color: var(--secondary-color);
+            margin-bottom: 0.75rem;
+            font-size: 1rem;
+        }
+        
+        .job-select {
+            width: 100%;
+            padding: 1rem;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            font-size: 1rem;
+            background: white;
+            color: var(--secondary-color);
+            transition: all 0.3s ease;
+        }
+        
+        .job-select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.1);
+        }
+        
+        .job-info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: white;
+            border-radius: 8px;
+            border-left: 3px solid var(--primary-color);
+            display: none;
+        }
+        
+        .job-info.show {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .job-info h4 {
+            color: var(--secondary-color);
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+        }
+        
+        .job-info p {
+            color: #6c757d;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+        }
+        
+        .skills-required {
+            margin-top: 0.75rem;
+        }
+        
+        .skill-req-tag {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: rgba(255, 107, 53, 0.1);
+            color: var(--primary-color);
+            border: 1px solid rgba(255, 107, 53, 0.2);
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin: 0.25rem 0.25rem 0.25rem 0;
+        }
+        
         /* Upload Zone */
         .upload-zone {
             border: 2px dashed var(--primary-color);
@@ -297,6 +488,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             background: rgba(255, 107, 53, 0.15);
             border-color: var(--secondary-color);
             transform: scale(1.02);
+        }
+        
+        .upload-zone.disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            pointer-events: none;
         }
         
         .upload-icon {
@@ -367,6 +564,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             background: rgba(220, 53, 69, 0.1);
             color: #721c24;
             border-color: #dc3545;
+        }
+        
+        .alert-success {
+            background: rgba(40, 167, 69, 0.1);
+            color: #155724;
+            border-color: #28a745;
         }
         
         /* Results Display */
@@ -529,6 +732,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             border: 1px solid rgba(220, 53, 69, 0.2);
         }
         
+        /* Application Success Message */
+        .application-success {
+            background: rgba(40, 167, 69, 0.05);
+            border: 2px solid rgba(40, 167, 69, 0.2);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .application-success .success-icon {
+            font-size: 3rem;
+            color: #28a745;
+            margin-bottom: 1rem;
+        }
+        
+        .application-success h3 {
+            color: #28a745;
+            margin-bottom: 0.5rem;
+        }
+        
+        .application-success p {
+            color: #155724;
+            margin-bottom: 1rem;
+        }
+        
         /* Mobile Responsive */
         @media (max-width: 768px) {
             .sidebar {
@@ -598,12 +827,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                 </a>
             </li>
             <li>
-                <a href="job-opportunities.php">
-                    <span class="icon">💼</span>
-                    <span>Job Opportunities</span>
-                </a>
-            </li>
-            <li>
                 <a href="profile.php">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
@@ -633,7 +856,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
     <!-- Main Content -->
     <div class="main-content">
         <div class="topbar">
-            <h1 class="page-title">🤖 AI Resume Parser</h1>
+            <h1 class="page-title">🤖 AI Resume Parser & Job Application</h1>
             <div class="topbar-actions">
                 <span style="color: #6c757d; font-size: 0.9rem;">
                     Welcome, <?php echo htmlspecialchars($_SESSION['full_name']); ?>
@@ -642,14 +865,31 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         </div>
         
         <div class="content-area">
-            <?php if (!$success && !$parsed_data): ?>
+            <?php if ($success && $application_created): ?>
+            <!-- Application Success Message -->
+            <div class="application-success">
+                <div class="success-icon">🎉</div>
+                <h3>Application Submitted Successfully!</h3>
+                <p>Your resume has been parsed and your application for "<?php echo htmlspecialchars($selected_job['title']); ?>" has been submitted.</p>
+                <div style="margin-top: 1.5rem;">
+                    <a href="my-applications.php" class="btn btn-primary" style="margin-right: 1rem;">
+                        📝 View My Applications
+                    </a>
+                    <a href="candidate-upload.php" class="btn" style="background: var(--secondary-color); color: white;">
+                        📤 Apply for Another Job
+                    </a>
+                </div>
+            </div>
+            <?php endif; ?>
+            
+            <?php if (!$success): ?>
             <!-- Upload Section -->
             <div class="card">
                 <div class="card-header">
                     <span class="icon">📤</span>
                     <div>
-                        <h3>Upload Your Resume</h3>
-                        <p style="margin: 0; opacity: 0.9;">Let our AI extract key information automatically</p>
+                        <h3>Apply for a Job Position</h3>
+                        <p style="margin: 0; opacity: 0.9;">Select a job and upload your resume to apply</p>
                     </div>
                 </div>
                 <div class="card-body">
@@ -660,6 +900,36 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                     <?php endif; ?>
                     
                     <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                        <!-- Job Position Selection -->
+                        <div class="job-selection">
+                            <label for="job_position">
+                                💼 Select Job Position to Apply For
+                            </label>
+                            <select name="job_position" id="job_position" class="job-select" required>
+                                <option value="">-- Choose a job position --</option>
+                                <?php foreach ($job_positions as $job): ?>
+                                <option value="<?php echo $job['id']; ?>" 
+                                        data-department="<?php echo htmlspecialchars($job['department']); ?>"
+                                        data-description="<?php echo htmlspecialchars($job['description']); ?>"
+                                        data-skills="<?php echo htmlspecialchars($job['required_skills']); ?>"
+                                        data-experience="<?php echo htmlspecialchars($job['experience_level']); ?>">
+                                    <?php echo htmlspecialchars($job['title']); ?> - <?php echo htmlspecialchars($job['department']); ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                            
+                            <div class="job-info" id="jobInfo">
+                                <h4 id="jobTitle"></h4>
+                                <p><strong>Department:</strong> <span id="jobDepartment"></span></p>
+                                <p><strong>Experience Level:</strong> <span id="jobExperience"></span></p>
+                                <p><strong>Description:</strong> <span id="jobDescription"></span></p>
+                                <div class="skills-required">
+                                    <strong>Required Skills:</strong>
+                                    <div id="jobSkills"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
                         <div class="upload-zone" id="dropZone">
                             <div class="upload-icon">📄</div>
                             <div class="upload-text">
@@ -679,7 +949,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                         
                         <div class="upload-progress" id="uploadProgress">
                             <div style="margin-bottom: 0.5rem; font-weight: 600; color: var(--secondary-color);">
-                                Processing your resume...
+                                Processing your application...
                             </div>
                             <div class="progress-bar-container">
                                 <div class="progress-bar-fill" id="progressBar"></div>
@@ -687,21 +957,85 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                         </div>
                         
                         <button type="submit" class="btn btn-primary" id="submitBtn" style="width: 100%; margin-top: 1.5rem;" disabled>
-                            🚀 Parse Resume with AI
+                            🚀 Submit Application
                         </button>
                     </form>
                 </div>
             </div>
+            
+            <!-- Available Job Positions Info -->
+            <?php if (!empty($job_positions)): ?>
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">💼</span>
+                    <div>
+                        <h3>Available Job Positions</h3>
+                        <p style="margin: 0; opacity: 0.9;">Browse all open positions</p>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+                        <?php foreach ($job_positions as $job): ?>
+                        <div class="experience-item">
+                            <div class="item-title"><?php echo htmlspecialchars($job['title']); ?></div>
+                            <div class="item-company"><?php echo htmlspecialchars($job['department']); ?> Department</div>
+                            <div class="item-duration">
+                                Experience Level: <?php echo ucfirst(htmlspecialchars($job['experience_level'])); ?>
+                            </div>
+                            <div class="item-description">
+                                <?php echo htmlspecialchars($job['description']); ?>
+                            </div>
+                            <div class="skills-required" style="margin-top: 1rem;">
+                                <strong>Required Skills:</strong><br>
+                                <?php 
+                                $skills = explode(',', $job['required_skills']);
+                                foreach ($skills as $skill): 
+                                ?>
+                                <span class="skill-req-tag"><?php echo trim(htmlspecialchars($skill)); ?></span>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
             <?php endif; ?>
             
-            <?php if ($success && $parsed_data): ?>
-            <!-- Results Section -->
+            <?php endif; ?>
+            
+            <?php if ($success && $parsed_data && !$application_created): ?>
+            <!-- Results Section (if parsing succeeded but application failed) -->
             <div class="card">
                 <div class="card-header">
                     <span class="icon">✅</span>
                     <div>
                         <h3>Resume Parsing Complete</h3>
                         <p style="margin: 0; opacity: 0.9;">AI successfully extracted information from your resume</p>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-danger">
+                        <strong>⚠️ Note:</strong> Resume was parsed successfully but application creation failed. Please try uploading again.
+                    </div>
+                    
+                    <!-- Action Buttons -->
+                    <div style="margin-top: 2rem; text-align: center; padding-top: 2rem; border-top: 1px solid #e9ecef;">
+                        <a href="candidate-upload.php" class="btn btn-primary">
+                            📤 Try Again
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+            
+            <?php if ($success && $parsed_data && $application_created): ?>
+            <!-- Full Results Section -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon">✅</span>
+                    <div>
+                        <h3>Resume Analysis Results</h3>
+                        <p style="margin: 0; opacity: 0.9;">Here's what our AI extracted from your resume</p>
                     </div>
                 </div>
                 <div class="card-body">
@@ -871,35 +1205,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                         <?php endif; ?>
                     </div>
                     
-                    <!-- Action Buttons -->
-                    <div style="margin-top: 2rem; text-align: center; padding-top: 2rem; border-top: 1px solid #e9ecef;">
-                        <a href="candidate-upload.php" class="btn btn-primary" style="margin-right: 1rem;">
-                            📤 Upload Another Resume
-                        </a>
-                        <a href="my-applications.php" class="btn" style="background: var(--secondary-color); color: white;">
-                            📝 View My Applications
-                        </a>
-                    </div>
+                    <!-- Raw Data Debug (Collapsible) -->
+                    <details style="margin-top: 2rem;">
+                        <summary style="cursor: pointer; color: #6c757d; font-size: 0.9rem; padding: 1rem; background: #f8f9fa; border-radius: 12px;">
+                            🔍 View Raw API Response (for debugging)
+                        </summary>
+                        <pre style="background: #f5f5f5; padding: 1.5rem; border-radius: 12px; overflow-x: auto; font-size: 0.8rem; margin-top: 1rem;">
+<?php echo htmlspecialchars(json_encode($parsed_data, JSON_PRETTY_PRINT)); ?>
+                        </pre>
+                    </details>
                 </div>
             </div>
-            
-            <!-- Raw Data Debug (Collapsible) -->
-            <details style="margin-top: 2rem;">
-                <summary style="cursor: pointer; color: #6c757d; font-size: 0.9rem; padding: 1rem; background: #f8f9fa; border-radius: 12px;">
-                    🔍 View Raw API Response (for debugging)
-                </summary>
-                <pre style="background: #f5f5f5; padding: 1.5rem; border-radius: 12px; overflow-x: auto; font-size: 0.8rem; margin-top: 1rem;">
-<?php echo htmlspecialchars(json_encode($parsed_data, JSON_PRETTY_PRINT)); ?>
-                </pre>
-            </details>
             <?php endif; ?>
         </div>
     </div>
     
     <!-- Status Indicator -->
-    <?php if ($success): ?>
+    <?php if ($success && $application_created): ?>
     <div class="status-indicator success show">
-        ✅ Resume parsed successfully!
+        ✅ Application submitted successfully!
     </div>
     <?php elseif ($error): ?>
     <div class="status-indicator error show">
@@ -913,6 +1237,46 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             sidebar.classList.toggle('active');
         }
         
+        // Job position selection handling
+        const jobSelect = document.getElementById('job_position');
+        const jobInfo = document.getElementById('jobInfo');
+        const jobTitle = document.getElementById('jobTitle');
+        const jobDepartment = document.getElementById('jobDepartment');
+        const jobDescription = document.getElementById('jobDescription');
+        const jobExperience = document.getElementById('jobExperience');
+        const jobSkills = document.getElementById('jobSkills');
+        const uploadZone = document.getElementById('dropZone');
+        
+        jobSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            
+            if (this.value) {
+                // Show job information
+                jobTitle.textContent = selectedOption.text.split(' - ')[0];
+                jobDepartment.textContent = selectedOption.dataset.department;
+                jobDescription.textContent = selectedOption.dataset.description;
+                jobExperience.textContent = selectedOption.dataset.experience.charAt(0).toUpperCase() + selectedOption.dataset.experience.slice(1);
+                
+                // Display skills
+                jobSkills.innerHTML = '';
+                const skills = selectedOption.dataset.skills.split(',');
+                skills.forEach(skill => {
+                    const skillTag = document.createElement('span');
+                    skillTag.className = 'skill-req-tag';
+                    skillTag.textContent = skill.trim();
+                    jobSkills.appendChild(skillTag);
+                });
+                
+                jobInfo.classList.add('show');
+                uploadZone.classList.remove('disabled');
+                updateSubmitButton();
+            } else {
+                jobInfo.classList.remove('show');
+                uploadZone.classList.add('disabled');
+                updateSubmitButton();
+            }
+        });
+        
         // File upload handling
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('resume');
@@ -923,15 +1287,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         const uploadProgress = document.getElementById('uploadProgress');
         const progressBar = document.getElementById('progressBar');
         
-        // Click to upload
+        // Click to upload (only if job is selected)
         dropZone.addEventListener('click', () => {
-            fileInput.click();
+            if (jobSelect.value && !dropZone.classList.contains('disabled')) {
+                fileInput.click();
+            }
         });
         
         // Drag and drop
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
-            dropZone.classList.add('drag-active');
+            if (jobSelect.value && !dropZone.classList.contains('disabled')) {
+                dropZone.classList.add('drag-active');
+            }
         });
         
         dropZone.addEventListener('dragleave', () => {
@@ -942,10 +1310,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             e.preventDefault();
             dropZone.classList.remove('drag-active');
             
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                fileInput.files = files;
-                handleFileSelect();
+            if (jobSelect.value && !dropZone.classList.contains('disabled')) {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    handleFileSelect();
+                }
             }
         });
         
@@ -958,22 +1328,46 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                 const fileSize = (file.size / 1024 / 1024).toFixed(2);
                 selectedFile.innerHTML = `<strong>Selected:</strong> ${file.name} (${fileSize} MB)`;
                 fileInfo.style.display = 'block';
+                updateSubmitButton();
+            }
+        }
+        
+        function updateSubmitButton() {
+            const hasJob = jobSelect.value !== '';
+            const hasFile = fileInput.files.length > 0;
+            
+            if (hasJob && hasFile) {
                 submitBtn.disabled = false;
                 submitBtn.style.background = 'var(--kabel-gradient)';
+                submitBtn.innerHTML = '🚀 Submit Application';
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.style.background = '#6c757d';
+                if (!hasJob) {
+                    submitBtn.innerHTML = '💼 Select Job Position First';
+                } else if (!hasFile) {
+                    submitBtn.innerHTML = '📄 Upload Resume First';
+                }
             }
         }
         
         // Form submission with progress
         uploadForm.addEventListener('submit', function(e) {
+            if (!jobSelect.value) {
+                e.preventDefault();
+                alert('Please select a job position first.');
+                return;
+            }
+            
             if (!fileInput.files[0]) {
                 e.preventDefault();
-                alert('Please select a file first.');
+                alert('Please select a resume file first.');
                 return;
             }
             
             // Show progress
             uploadProgress.style.display = 'block';
-            submitBtn.innerHTML = '⏳ Processing Resume...';
+            submitBtn.innerHTML = '⏳ Processing Application...';
             submitBtn.disabled = true;
             
             // Simulate progress
@@ -996,6 +1390,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                 statusIndicator.classList.remove('show');
             }
         }, 5000);
+        
+        // Initialize upload zone state
+        if (!jobSelect.value) {
+            uploadZone.classList.add('disabled');
+        }
+        
+        updateSubmitButton();
     </script>
 </body>
 </html>

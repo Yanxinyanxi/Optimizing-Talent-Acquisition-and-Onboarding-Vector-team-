@@ -1,15 +1,101 @@
 // Kabel HR System - Main JavaScript
 
-// Initialize when document is ready
+// Handle form submissions with loading states
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize components
-    initFileUpload();
-    initChatbot();
-    initStatusUpdates();
-    initTaskUpdates();
-    initFormValidation();
-    initNumberAnimations();
-    initSearch();
+    // Handle all forms with loading states
+    const forms = document.querySelectorAll('form');
+    forms.forEach(form => {
+        form.addEventListener('submit', function(e) {
+            const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) {
+                // Add loading state
+                submitBtn.disabled = true;
+                submitBtn.classList.add('loading');
+                
+                // Store original text
+                const originalText = submitBtn.textContent || submitBtn.value;
+                
+                // Change button text
+                if (submitBtn.tagName === 'BUTTON') {
+                    submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
+                } else {
+                    submitBtn.value = 'Processing...';
+                }
+                
+                // Reset button after 5 seconds (fallback)
+                setTimeout(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('loading');
+                    if (submitBtn.tagName === 'BUTTON') {
+                        submitBtn.textContent = originalText;
+                    } else {
+                        submitBtn.value = originalText;
+                    }
+                }, 5000);
+            }
+        });
+    });
+    
+    // Handle status update dropdowns
+    const statusSelects = document.querySelectorAll('select[name="status"]');
+    statusSelects.forEach(select => {
+        select.addEventListener('change', function() {
+            const form = this.closest('form');
+            if (form) {
+                // Add loading indicator to the select
+                this.style.opacity = '0.6';
+                this.disabled = true;
+                
+                // Create a loading spinner
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner';
+                spinner.style.marginLeft = '10px';
+                this.parentNode.appendChild(spinner);
+                
+                // Submit the form
+                form.submit();
+            }
+        });
+    });
+    
+    // Auto-hide alerts after 5 seconds
+    const alerts = document.querySelectorAll('.alert');
+    alerts.forEach(alert => {
+        setTimeout(() => {
+            alert.style.opacity = '0';
+            alert.style.transform = 'translateY(-20px)';
+            setTimeout(() => {
+                alert.remove();
+            }, 300);
+        }, 5000);
+    });
+    
+    // Add smooth scrolling to anchor links
+    const links = document.querySelectorAll('a[href^="#"]');
+    links.forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                target.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        });
+    });
+    
+    // Add hover effects to cards
+    const cards = document.querySelectorAll('.card, .stat-card');
+    cards.forEach(card => {
+        card.addEventListener('mouseenter', function() {
+            this.style.transform = 'translateY(-5px)';
+        });
+        
+        card.addEventListener('mouseleave', function() {
+            this.style.transform = 'translateY(0)';
+        });
+    });
 });
 
 // File Upload Enhancement
@@ -295,24 +381,162 @@ function validateForm(form) {
     return isValid;
 }
 
-// Show Alert
+// Utility functions
 function showAlert(message, type = 'info') {
-    // Remove existing alerts
-    const existingAlerts = document.querySelectorAll('.alert');
-    existingAlerts.forEach(alert => alert.remove());
-    
     const alertDiv = document.createElement('div');
     alertDiv.className = `alert alert-${type}`;
-    alertDiv.innerHTML = message;
+    alertDiv.innerHTML = `
+        <strong>${type.charAt(0).toUpperCase() + type.slice(1)}:</strong> ${message}
+        <button type="button" class="close" onclick="this.parentElement.remove()" style="float: right; background: none; border: none; font-size: 1.2rem; cursor: pointer;">&times;</button>
+    `;
     
-    // Insert at the top of the main container
+    // Insert at the top of the container
     const container = document.querySelector('.container') || document.body;
     container.insertBefore(alertDiv, container.firstChild);
     
-    // Auto remove after 5 seconds
+    // Auto-remove after 5 seconds
     setTimeout(() => {
         alertDiv.remove();
     }, 5000);
+}
+
+function confirmDelete(message = 'Are you sure you want to delete this item?') {
+    return confirm(message);
+}
+
+// Progress bar animation
+function animateProgressBar(element, targetPercent) {
+    let currentPercent = 0;
+    const increment = targetPercent / 100;
+    
+    const timer = setInterval(() => {
+        currentPercent += increment;
+        element.style.width = currentPercent + '%';
+        
+        if (currentPercent >= targetPercent) {
+            clearInterval(timer);
+            element.style.width = targetPercent + '%';
+        }
+    }, 10);
+}
+
+// Table search functionality
+function addTableSearch(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    
+    // Create search input
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search table...';
+    searchInput.className = 'form-control';
+    searchInput.style.marginBottom = '1rem';
+    
+    // Insert before table
+    table.parentNode.insertBefore(searchInput, table);
+    
+    // Add search functionality
+    searchInput.addEventListener('keyup', function() {
+        const filter = this.value.toLowerCase();
+        const rows = table.getElementsByTagName('tr');
+        
+        for (let i = 1; i < rows.length; i++) { // Skip header row
+            const row = rows[i];
+            const cells = row.getElementsByTagName('td');
+            let found = false;
+            
+            for (let j = 0; j < cells.length; j++) {
+                if (cells[j].textContent.toLowerCase().includes(filter)) {
+                    found = true;
+                    break;
+                }
+            }
+            
+            row.style.display = found ? '' : 'none';
+        }
+    });
+}
+
+// Mobile menu toggle
+function toggleMobileMenu() {
+    const sidebar = document.querySelector('.sidebar');
+    const overlay = document.querySelector('.mobile-overlay');
+    
+    if (sidebar) {
+        sidebar.classList.toggle('show');
+    }
+    
+    if (overlay) {
+        overlay.classList.toggle('show');
+    }
+}
+
+// Print functionality
+function printTable(tableId) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
+    
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+        <html>
+        <head>
+            <title>Print Table</title>
+            <style>
+                body { font-family: Arial, sans-serif; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+            </style>
+        </head>
+        <body>
+            ${table.outerHTML}
+        </body>
+        </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.print();
+}
+
+// Local storage helpers
+function saveToLocalStorage(key, data) {
+    try {
+        localStorage.setItem(key, JSON.stringify(data));
+        return true;
+    } catch (e) {
+        console.error('Error saving to localStorage:', e);
+        return false;
+    }
+}
+
+function getFromLocalStorage(key) {
+    try {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        console.error('Error reading from localStorage:', e);
+        return null;
+    }
+}
+
+function getFromLocalStorage(key) {
+    try {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : null;
+    } catch (e) {
+        console.error('Error reading from localStorage:', e);
+        return null;
+    }
+}
+
+function removeFromLocalStorage(key) {
+    try {
+        localStorage.removeItem(key);
+        return true;
+    } catch (e) {
+        console.error('Error removing from localStorage:', e);
+        return false;
+    }
 }
 
 // Format File Size

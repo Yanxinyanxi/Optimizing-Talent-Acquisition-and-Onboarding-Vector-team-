@@ -534,25 +534,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         
         <ul class="sidebar-nav">
             <li>
-                <a href="candidate-upload.php">
+                <a href="candidate-dashboard.php">
                     <span class="icon">📄</span>
                     <span>Upload Resume</span>
                 </a>
             </li>
             <li>
-                <a href="my-applications.php">
+                <a href="candidate-applications.php">
                     <span class="icon">📝</span>
                     <span>My Applications</span>
                 </a>
             </li>
             <li>
-                <a href="profile.php" class="active">
+                <a href="candidate-profile.php" class="active">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="help.php">
+                <a href="candidate-help.php">
                     <span class="icon">❓</span>
                     <span>Help & Support</span>
                 </a>
@@ -577,7 +577,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         <div class="topbar">
             <h1 class="page-title">👤 My Profile</h1>
             <div class="topbar-actions">
-                <a href="my-applications.php" class="btn btn-secondary">
+                <a href="candidate-applications.php" class="btn btn-secondary">
                     📝 View Applications
                 </a>
             </div>
@@ -708,7 +708,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             <div style="font-size: 3rem; margin-bottom: 1rem;">📄</div>
                             <h3>No Resume Data Available</h3>
                             <p style="margin-bottom: 1.5rem;">Upload your resume to see your parsed information here.</p>
-                            <a href="candidate-upload.php" class="btn btn-primary">
+                            <a href="candidate-dashboard.php" class="btn btn-primary">
                                 📤 Upload Resume
                             </a>
                         </div>

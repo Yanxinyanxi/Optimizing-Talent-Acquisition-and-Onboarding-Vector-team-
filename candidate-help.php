@@ -598,25 +598,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submit_inquiry'])) {
         
         <ul class="sidebar-nav">
             <li>
-                <a href="candidate-upload.php">
+                <a href="candidate-dashboard.php">
                     <span class="icon">📄</span>
                     <span>Upload Resume</span>
                 </a>
             </li>
             <li>
-                <a href="my-applications.php">
+                <a href="candidate-applications.php">
                     <span class="icon">📝</span>
                     <span>My Applications</span>
                 </a>
             </li>
             <li>
-                <a href="profile.php">
+                <a href="candidate-profile.php">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="help.php" class="active">
+                <a href="candidate-help.php" class="active">
                     <span class="icon">❓</span>
                     <span>Help & Support</span>
                 </a>
@@ -664,17 +664,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submit_inquiry'])) {
                     </div>
                     
                     <div class="quick-actions">
-                        <a href="candidate-upload.php" class="quick-action">
+                        <a href="candidate-dashboard.php" class="quick-action">
                             <div class="icon">📤</div>
                             <h6>Upload Resume</h6>
                             <p>Submit your application for available positions</p>
                         </a>
-                        <a href="my-applications.php" class="quick-action">
+                        <a href="candidate-applications.php" class="quick-action">
                             <div class="icon">📋</div>
                             <h6>Track Applications</h6>
                             <p>Monitor your application status and progress</p>
                         </a>
-                        <a href="profile.php" class="quick-action">
+                        <a href="candidate-profile.php" class="quick-action">
                             <div class="icon">👤</div>
                             <h6>Update Profile</h6>
                             <p>Keep your information current and complete</p>
@@ -1119,7 +1119,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submit_inquiry'])) {
                         <a href="https://www.haircare2u.my" target="_blank" class="btn btn-outline" style="margin-right: 1rem;">
                             🌐 Visit Our Website
                         </a>
-                        <a href="candidate-upload.php" class="btn btn-primary">
+                        <a href="candidate-dashboard.php" class="btn btn-primary">
                             💼 Browse Job Openings
                         </a>
                     </div>

@@ -596,25 +596,25 @@ function getNextSteps($status) {
         
         <ul class="sidebar-nav">
             <li>
-                <a href="candidate-upload.php">
+                <a href="candidate-dashboard.php">
                     <span class="icon">📄</span>
                     <span>Upload Resume</span>
                 </a>
             </li>
             <li>
-                <a href="my-applications.php" class="active">
+                <a href="candidate-applications.php" class="active">
                     <span class="icon">📝</span>
                     <span>My Applications</span>
                 </a>
             </li>
             <li>
-                <a href="profile.php">
+                <a href="candidate-profile.php">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="help.php">
+                <a href="candidate-help.php">
                     <span class="icon">❓</span>
                     <span>Help & Support</span>
                 </a>
@@ -639,7 +639,7 @@ function getNextSteps($status) {
         <div class="topbar">
             <h1 class="page-title">📝 My Applications</h1>
             <div class="topbar-actions">
-                <a href="candidate-upload.php" class="btn btn-primary">
+                <a href="candidate-dashboard.php" class="btn btn-primary">
                     📤 Apply for New Job
                 </a>
             </div>
@@ -755,7 +755,7 @@ function getNextSteps($status) {
                 <div class="empty-text">
                     You haven't applied for any positions yet. Start your career journey by uploading your resume and applying for available positions.
                 </div>
-                <a href="candidate-upload.php" class="btn btn-primary">
+                <a href="candidate-dashboard.php" class="btn btn-primary">
                     🚀 Apply for Your First Job
                 </a>
             </div>

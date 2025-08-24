@@ -11,6 +11,16 @@ if (!isLoggedIn()) {
     exit;
 }
 
+// Check if user is now an employee (after being hired)
+if ($_SESSION['role'] === 'employee') {
+    // Redirect to employee dashboard
+    header('Location: employee-dashboard.php');
+    exit;
+}
+
+// Ensure candidate access only
+requireRole('candidate');
+
 // Check database connection
 if (!isset($connection) || $connection->connect_error) {
     die("Database connection failed. Please check your database configuration.");
@@ -34,6 +44,22 @@ try {
     }
 } catch (Exception $e) {
     error_log("Error fetching job positions: " . $e->getMessage());
+}
+
+// Check if candidate has been hired and role updated
+$role_check_stmt = $connection->prepare("SELECT role, department FROM users WHERE id = ?");
+$role_check_stmt->bind_param("i", $_SESSION['user_id']);
+$role_check_stmt->execute();
+$role_check_result = $role_check_stmt->get_result();
+if ($role_check_result->num_rows > 0) {
+    $user_data = $role_check_result->fetch_assoc();
+    if ($user_data['role'] === 'employee') {
+        // Update session and redirect
+        $_SESSION['role'] = 'employee';
+        $_SESSION['department'] = $user_data['department'];
+        header('Location: employee-dashboard.php');
+        exit;
+    }
 }
 
 // Check if form was submitted
@@ -115,16 +141,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                 
                 if (isset($parsed_result['error'])) {
                     $error = "Error parsing resume: " . $parsed_result['error'];
+                    error_log("Resume parsing error: " . $parsed_result['error']);
                 } elseif (isset($parsed_result['success']) && $parsed_result['success']) {
                     // Parse was successful
                     $parsed_data = $parsed_result['data'];
+                    
+                    // Log success for debugging (optional)
+                    error_log("Resume parsing successful for user: " . $_SESSION['user_id']);
+                    
+                    // Calculate match percentage based on job requirements
+                    $match_percentage = calculateMatchPercentage($parsed_data, $selected_job_id, $connection);
                     
                     // Start transaction for saving both parsed data and application
                     $connection->begin_transaction();
                     
                     try {
                         // Save parsed data to parsed_resumes table
-                        if ($extracta->saveParsedData($parsed_data, $file_name, $connection)) {
+                        $save_result = $extracta->saveParsedData($parsed_data, $file_name, $connection);
+                        
+                        if ($save_result) {
                             
                             // Create application entry
                             $app_stmt = $connection->prepare("
@@ -138,9 +173,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                                     extracted_experience,
                                     extracted_education,
                                     extracted_contact,
+                                    match_percentage,
                                     api_processing_status,
                                     status
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'pending')
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'pending')
                             ");
                             
                             // Prepare data for application
@@ -150,40 +186,45 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                             $education = isset($parsed_data['education']) ? json_encode($parsed_data['education']) : null;
                             $contact = isset($parsed_data['personal_info']) ? json_encode($parsed_data['personal_info']) : null;
                             
-                            $app_stmt->bind_param("iisssssss", 
-    $_SESSION['user_id'],
-    $selected_job_id,
-    $file_name,
-    $file_path,
-    $api_response,
-    $skills,
-    $experience,
-    $education,
-    $contact
-);
+                            $app_stmt->bind_param("iisssssssd", 
+                                $_SESSION['user_id'],
+                                $selected_job_id,
+                                $file_name,
+                                $file_path,
+                                $api_response,
+                                $skills,
+                                $experience,
+                                $education,
+                                $contact,
+                                $match_percentage
+                            );
                             
                             if ($app_stmt->execute()) {
                                 $connection->commit();
                                 $success = true;
                                 $application_created = true;
+                                error_log("Application created successfully for user: " . $_SESSION['user_id']);
                             } else {
                                 $connection->rollback();
-                                $error = "Resume parsed but failed to create application.";
+                                $error = "Resume parsed but failed to create application: " . $app_stmt->error;
+                                error_log("Application creation failed: " . $app_stmt->error);
                             }
                             
                         } else {
                             $connection->rollback();
                             $error = "Failed to save parsed resume data.";
+                            error_log("Failed to save parsed resume data - rolling back transaction");
                         }
                         
                     } catch (Exception $e) {
                         $connection->rollback();
                         $error = "Database error: " . $e->getMessage();
-                        error_log("Application creation error: " . $e->getMessage());
+                        error_log("Database exception: " . $e->getMessage());
                     }
                     
                 } else {
                     $error = "Unexpected response from API.";
+                    error_log("Unexpected API response: " . print_r($parsed_result, true));
                 }
                 
             } else {
@@ -192,6 +233,70 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         }
     }
     $processing = false;
+}
+
+// Function to calculate match percentage
+function calculateMatchPercentage($parsed_data, $job_position_id, $connection) {
+    try {
+        // Get job requirements
+        $job_stmt = $connection->prepare("SELECT required_skills, experience_level FROM job_positions WHERE id = ?");
+        $job_stmt->bind_param("i", $job_position_id);
+        $job_stmt->execute();
+        $job_result = $job_stmt->get_result();
+        
+        if ($job_result->num_rows === 0) {
+            return 0;
+        }
+        
+        $job_data = $job_result->fetch_assoc();
+        $required_skills = explode(',', strtolower($job_data['required_skills']));
+        $required_experience = strtolower($job_data['experience_level']);
+        
+        // Get candidate skills
+        $candidate_skills = isset($parsed_data['skills']) ? array_map('strtolower', $parsed_data['skills']) : [];
+        
+        // Calculate skill match (70% weight)
+        $skill_matches = 0;
+        foreach ($required_skills as $required_skill) {
+            $required_skill = trim($required_skill);
+            foreach ($candidate_skills as $candidate_skill) {
+                if (strpos($candidate_skill, $required_skill) !== false || 
+                    strpos($required_skill, $candidate_skill) !== false) {
+                    $skill_matches++;
+                    break;
+                }
+            }
+        }
+        
+        $skill_percentage = count($required_skills) > 0 ? ($skill_matches / count($required_skills)) * 100 : 0;
+        
+        // Calculate experience match (30% weight)
+        $experience_percentage = 50; // Default middle score
+        if (isset($parsed_data['work_experience']) && !empty($parsed_data['work_experience'])) {
+            $years_experience = count($parsed_data['work_experience']); // Simplified calculation
+            
+            switch ($required_experience) {
+                case 'entry':
+                    $experience_percentage = $years_experience >= 0 ? 100 : 70;
+                    break;
+                case 'mid':
+                    $experience_percentage = $years_experience >= 1 ? 100 : ($years_experience > 0 ? 80 : 60);
+                    break;
+                case 'senior':
+                    $experience_percentage = $years_experience >= 3 ? 100 : ($years_experience >= 2 ? 80 : 50);
+                    break;
+            }
+        }
+        
+        // Weighted average
+        $final_percentage = ($skill_percentage * 0.7) + ($experience_percentage * 0.3);
+        
+        return round($final_percentage, 2);
+        
+    } catch (Exception $e) {
+        error_log("Error calculating match percentage: " . $e->getMessage());
+        return 0;
+    }
 }
 ?>
 
@@ -575,6 +680,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             border-color: #28a745;
         }
         
+        .alert-info {
+            background: rgba(102, 16, 242, 0.1);
+            color: #5a1a6b;
+            border-color: #6610f2;
+        }
+        
         /* Results Display */
         .info-section {
             background: rgba(43, 76, 140, 0.05);
@@ -749,15 +860,49 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             font-size: 3rem;
             color: #28a745;
             margin-bottom: 1rem;
+            animation: bounce 1s ease-in-out infinite alternate;
+        }
+        
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-10px); }
         }
         
         .application-success h3 {
             color: #28a745;
             margin-bottom: 0.5rem;
+            font-size: 1.5rem;
         }
         
         .application-success p {
             color: #155724;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+        
+        /* Role Check Notice */
+        .role-notice {
+            background: rgba(102, 16, 242, 0.05);
+            border: 2px solid rgba(102, 16, 242, 0.2);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .role-notice .notice-icon {
+            font-size: 3rem;
+            color: #6610f2;
+            margin-bottom: 1rem;
+        }
+        
+        .role-notice h3 {
+            color: #6610f2;
+            margin-bottom: 0.5rem;
+        }
+        
+        .role-notice p {
+            color: #5a1a6b;
             margin-bottom: 1rem;
         }
         
@@ -823,24 +968,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         }
 
         /* Custom Scrollbar for Sidebar */
-.sidebar::-webkit-scrollbar {
-    width: 6px;
-}
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
 
-.sidebar::-webkit-scrollbar-track {
-    background: #f1f1f1;
-}
+        .sidebar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
 
-.sidebar::-webkit-scrollbar-thumb {
-    background: var(--primary-color); /* Orange color */
-    border-radius: 3px;
-}
+        .sidebar::-webkit-scrollbar-thumb {
+            background: var(--primary-color); /* Orange color */
+            border-radius: 3px;
+        }
 
-.sidebar::-webkit-scrollbar-thumb:hover {
-    background: var(--secondary-color); /* Blue color */
-}
-
-
+        .sidebar::-webkit-scrollbar-thumb:hover {
+            background: var(--secondary-color); /* Blue color */
+        }
     </style>
 </head>
 <body>
@@ -856,25 +999,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         
         <ul class="sidebar-nav">
             <li>
-                <a href="candidate-upload.php" class="active">
+                <a href="candidate-dashboard.php" class="active">
                     <span class="icon">📄</span>
                     <span>Upload Resume</span>
                 </a>
             </li>
             <li>
-                <a href="my-applications.php">
+                <a href="candidate-applications.php">
                     <span class="icon">📝</span>
                     <span>My Applications</span>
                 </a>
             </li>
             <li>
-                <a href="profile.php">
+                <a href="candidate-profile.php">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="help.php">
+                <a href="candidate-help.php">
                     <span class="icon">❓</span>
                     <span>Help & Support</span>
                 </a>
@@ -886,6 +1029,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                 <div class="avatar"><?php echo substr($_SESSION['full_name'], 0, 1); ?></div>
                 <div style="color: rgba(255,255,255,0.9); font-size: 0.9rem; margin-bottom: 0.5rem;">
                     <?php echo htmlspecialchars($_SESSION['full_name']); ?>
+                </div>
+                <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem; margin-bottom: 1rem;">
+                    Candidate
                 </div>
                 <a href="logout.php" style="color: rgba(255,255,255,0.7); text-decoration: none; font-size: 0.8rem;">
                     🚪 Logout
@@ -911,12 +1057,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
             <div class="application-success">
                 <div class="success-icon">🎉</div>
                 <h3>Application Submitted Successfully!</h3>
-                <p>Your resume has been parsed and your application for "<?php echo htmlspecialchars($selected_job['title']); ?>" has been submitted.</p>
+                <p>Your resume has been parsed and your application for "<strong><?php echo htmlspecialchars($selected_job['title']); ?></strong>" has been submitted with a match score of <strong><?php echo isset($match_percentage) ? number_format($match_percentage, 1) : 'N/A'; ?>%</strong>.</p>
                 <div style="margin-top: 1.5rem;">
-                    <a href="my-applications.php" class="btn btn-primary" style="margin-right: 1rem;">
+                    <a href="candidate-applications.php" class="btn btn-primary" style="margin-right: 1rem;">
                         📝 View My Applications
                     </a>
-                    <a href="candidate-upload.php" class="btn" style="background: var(--secondary-color); color: white;">
+                    <a href="candidate-dashboard.php" class="btn" style="background: var(--secondary-color); color: white;">
                         📤 Apply for Another Job
                     </a>
                 </div>
@@ -1061,7 +1207,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                     
                     <!-- Action Buttons -->
                     <div style="margin-top: 2rem; text-align: center; padding-top: 2rem; border-top: 1px solid #e9ecef;">
-                        <a href="candidate-upload.php" class="btn btn-primary">
+                        <a href="candidate-dashboard.php" class="btn btn-primary">
                             📤 Try Again
                         </a>
                     </div>
@@ -1080,6 +1226,22 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                     </div>
                 </div>
                 <div class="card-body">
+                    <!-- Match Score Display -->
+                    <?php if (isset($match_percentage)): ?>
+                    <div class="alert alert-info">
+                        <span>🎯</span>
+                        <div>
+                            <strong>Job Match Score:</strong> <?php echo number_format($match_percentage, 1); ?>% - 
+                            <?php 
+                            if ($match_percentage >= 90) echo "Excellent match!";
+                            elseif ($match_percentage >= 70) echo "Good match!";
+                            elseif ($match_percentage >= 50) echo "Fair match";
+                            else echo "Skills development recommended";
+                            ?>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+                    
                     <!-- Personal Information Section -->
                     <?php if (isset($parsed_data['personal_info']) && is_array($parsed_data['personal_info'])): ?>
                     <?php $personal = $parsed_data['personal_info']; ?>
@@ -1245,16 +1407,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
                         </div>
                         <?php endif; ?>
                     </div>
-                    
-                    <!-- Raw Data Debug (Collapsible) -->
-                    <details style="margin-top: 2rem;">
-                        <summary style="cursor: pointer; color: #6c757d; font-size: 0.9rem; padding: 1rem; background: #f8f9fa; border-radius: 12px;">
-                            🔍 View Raw API Response (for debugging)
-                        </summary>
-                        <pre style="background: #f5f5f5; padding: 1.5rem; border-radius: 12px; overflow-x: auto; font-size: 0.8rem; margin-top: 1rem;">
-<?php echo htmlspecialchars(json_encode($parsed_data, JSON_PRETTY_PRINT)); ?>
-                        </pre>
-                    </details>
                 </div>
             </div>
             <?php endif; ?>

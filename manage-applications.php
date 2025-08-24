@@ -14,6 +14,204 @@ if (!isLoggedIn()) {
 // Ensure HR access only
 requireRole('hr');
 
+// Handle status updates and bulk actions
+if ($_SERVER['REQUEST_METHOD'] == 'POST') {
+    $success = '';
+    $error = '';
+    
+    try {
+        // Handle single status update
+        if (isset($_POST['update_status']) && isset($_POST['application_id'])) {
+            $application_id = (int)$_POST['application_id'];
+            $new_status = $_POST['status'];
+            $notes = $_POST['notes'] ?? '';
+            
+            // Start transaction
+            $connection->begin_transaction();
+            
+            // Update application status
+            $stmt = $connection->prepare("UPDATE applications SET status = ?, hr_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+            $stmt->bind_param("ssi", $new_status, $notes, $application_id);
+            
+            if ($stmt->execute()) {
+                // If status is 'hired', convert candidate to employee
+                if ($new_status === 'hired') {
+                    // Get application details
+                    $app_stmt = $connection->prepare("SELECT candidate_id, job_position_id FROM applications WHERE id = ?");
+                    $app_stmt->bind_param("i", $application_id);
+                    $app_stmt->execute();
+                    $app_result = $app_stmt->get_result();
+                    $app_data = $app_result->fetch_assoc();
+                    
+                    if ($app_data) {
+                        // Get job details
+                        $job_stmt = $connection->prepare("SELECT department, title FROM job_positions WHERE id = ?");
+                        $job_stmt->bind_param("i", $app_data['job_position_id']);
+                        $job_stmt->execute();
+                        $job_result = $job_stmt->get_result();
+                        $job_data = $job_result->fetch_assoc();
+                        
+                        if ($job_data) {
+                            // Update user role and department
+                            $user_stmt = $connection->prepare("UPDATE users SET role = 'employee', department = ?, job_position_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                            $user_stmt->bind_param("sii", $job_data['department'], $app_data['job_position_id'], $app_data['candidate_id']);
+                            
+                            if ($user_stmt->execute()) {
+                                // Create onboarding tasks
+                                $task_stmt = $connection->prepare("
+                                    INSERT IGNORE INTO employee_onboarding (employee_id, task_id, status)
+                                    SELECT ?, ot.id, 'pending'
+                                    FROM onboarding_tasks ot
+                                    WHERE ot.department = ? OR ot.department = 'ALL'
+                                ");
+                                $task_stmt->bind_param("is", $app_data['candidate_id'], $job_data['department']);
+                                $task_stmt->execute();
+                                
+                                // Create training assignments
+                                $training_stmt = $connection->prepare("
+                                    INSERT IGNORE INTO employee_training (employee_id, module_id, status, progress_percentage)
+                                    SELECT ?, tm.id, 'not_started', 0
+                                    FROM training_modules tm
+                                    WHERE tm.department = ? OR tm.department = 'ALL'
+                                ");
+                                $training_stmt->bind_param("is", $app_data['candidate_id'], $job_data['department']);
+                                $training_stmt->execute();
+                                
+                                // Create employee documents
+                                $doc_stmt = $connection->prepare("
+                                    INSERT IGNORE INTO employee_documents (employee_id, document_name, document_type, status, is_required, description)
+                                    VALUES 
+                                    (?, 'Employment Contract', 'contract', 'pending', 1, 'Your employment contract and terms of service'),
+                                    (?, 'Personal Information Form', 'personal_form', 'pending', 1, 'Complete personal details and emergency contacts'),
+                                    (?, 'Bank Details Form', 'bank_form', 'pending', 1, 'Banking information for salary processing'),
+                                    (?, 'ID Copy', 'identification', 'pending', 1, 'Copy of your identification document (IC/Passport)'),
+                                    (?, 'Educational Certificates', 'education', 'pending', 1, 'Copies of your educational qualifications')
+                                ");
+                                $doc_stmt->bind_param("iiiii", 
+                                    $app_data['candidate_id'], 
+                                    $app_data['candidate_id'], 
+                                    $app_data['candidate_id'], 
+                                    $app_data['candidate_id'], 
+                                    $app_data['candidate_id']
+                                );
+                                $doc_stmt->execute();
+                                
+                                $connection->commit();
+                                $success = "Application status updated successfully! Candidate has been converted to employee and onboarding materials have been created.";
+                            } else {
+                                $connection->rollback();
+                                $error = "Failed to update user role: " . $connection->error;
+                            }
+                        } else {
+                            $connection->rollback();
+                            $error = "Job position not found.";
+                        }
+                    } else {
+                        $connection->rollback();
+                        $error = "Application not found.";
+                    }
+                } else {
+                    $connection->commit();
+                    $success = "Application status updated successfully!";
+                }
+            } else {
+                $connection->rollback();
+                $error = "Failed to update application status: " . $connection->error;
+            }
+        }
+        
+        // Handle bulk actions
+        elseif (isset($_POST['bulk_action']) && isset($_POST['selected_applications'])) {
+            $bulk_action = $_POST['bulk_action'];
+            $selected_applications = $_POST['selected_applications'];
+            $processed = 0;
+            $hired_count = 0;
+            
+            if (!empty($selected_applications) && !empty($bulk_action)) {
+                $connection->begin_transaction();
+                
+                foreach ($selected_applications as $app_id) {
+                    $app_id = (int)$app_id;
+                    
+                    switch ($bulk_action) {
+                        case 'approve_selected':
+                            $stmt = $connection->prepare("UPDATE applications SET status = 'selected', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                            $stmt->bind_param("i", $app_id);
+                            if ($stmt->execute()) $processed++;
+                            break;
+                            
+                        case 'reject_selected':
+                            $stmt = $connection->prepare("UPDATE applications SET status = 'rejected', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                            $stmt->bind_param("i", $app_id);
+                            if ($stmt->execute()) $processed++;
+                            break;
+                            
+                        case 'interview_selected':
+                            $stmt = $connection->prepare("UPDATE applications SET status = 'waiting_interview', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                            $stmt->bind_param("i", $app_id);
+                            if ($stmt->execute()) $processed++;
+                            break;
+                            
+                        case 'hire_selected':
+                            // Update status to hired
+                            $stmt = $connection->prepare("UPDATE applications SET status = 'hired', updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                            $stmt->bind_param("i", $app_id);
+                            if ($stmt->execute()) {
+                                // Convert to employee (same logic as above)
+                                $app_stmt = $connection->prepare("SELECT candidate_id, job_position_id FROM applications WHERE id = ?");
+                                $app_stmt->bind_param("i", $app_id);
+                                $app_stmt->execute();
+                                $app_result = $app_stmt->get_result();
+                                $app_data = $app_result->fetch_assoc();
+                                
+                                if ($app_data) {
+                                    $job_stmt = $connection->prepare("SELECT department, title FROM job_positions WHERE id = ?");
+                                    $job_stmt->bind_param("i", $app_data['job_position_id']);
+                                    $job_stmt->execute();
+                                    $job_result = $job_stmt->get_result();
+                                    $job_data = $job_result->fetch_assoc();
+                                    
+                                    if ($job_data) {
+                                        $user_stmt = $connection->prepare("UPDATE users SET role = 'employee', department = ?, job_position_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                                        $user_stmt->bind_param("sii", $job_data['department'], $app_data['job_position_id'], $app_data['candidate_id']);
+                                        
+                                        if ($user_stmt->execute()) {
+                                            // Create onboarding materials (simplified for bulk)
+                                            $task_stmt = $connection->prepare("INSERT IGNORE INTO employee_onboarding (employee_id, task_id, status) SELECT ?, ot.id, 'pending' FROM onboarding_tasks ot WHERE ot.department = ? OR ot.department = 'ALL'");
+                                            $task_stmt->bind_param("is", $app_data['candidate_id'], $job_data['department']);
+                                            $task_stmt->execute();
+                                            
+                                            $hired_count++;
+                                            $processed++;
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                    }
+                }
+                
+                if ($processed > 0) {
+                    $connection->commit();
+                    $success = "Successfully processed $processed applications.";
+                    if ($hired_count > 0) {
+                        $success .= " $hired_count candidates have been converted to employees.";
+                    }
+                } else {
+                    $connection->rollback();
+                    $error = "No applications were processed.";
+                }
+            } else {
+                $error = "Please select applications and an action.";
+            }
+        }
+        
+    } catch (Exception $e) {
+        if ($connection) $connection->rollback();
+        $error = "Database error: " . $e->getMessage();
+    }
+}
+
 // Get filter parameters
 $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 $filter_job_id = isset($_GET['job_id']) ? (int)$_GET['job_id'] : null;
@@ -24,92 +222,94 @@ try {
     $stmt = $connection->query("SELECT id, title, department FROM job_positions ORDER BY title");
     $job_positions = $stmt->fetch_all(MYSQLI_ASSOC);
     
-// Build query for applications with ranking
-$query = "
-    SELECT 
-        a.id,
-        u.full_name as candidate_name,
-        u.email as candidate_email,
-        a.extracted_contact,
-        a.match_percentage,
-        a.extracted_skills,
-        a.extracted_experience,
-        a.extracted_education,
-        a.api_response as parsed_data,
-        a.resume_filename,
-        a.applied_at,
-        a.status,
-        a.hr_notes,
-        j.title as job_title,
-        j.department,
-        j.required_skills,
-        j.experience_level,
-        j.description as job_description,
-        ROW_NUMBER() OVER (ORDER BY a.match_percentage DESC, a.applied_at DESC) as ranking
-    FROM applications a
-    JOIN job_positions j ON a.job_position_id = j.id
-    JOIN users u ON a.candidate_id = u.id
-    WHERE 1=1
-";
+    // Build query for applications with ranking
+    $query = "
+        SELECT 
+            a.id,
+            u.full_name as candidate_name,
+            u.email as candidate_email,
+            u.role as current_role,
+            u.department as current_department,
+            a.extracted_contact,
+            a.match_percentage,
+            a.extracted_skills,
+            a.extracted_experience,
+            a.extracted_education,
+            a.api_response as parsed_data,
+            a.resume_filename,
+            a.applied_at,
+            a.status,
+            a.hr_notes,
+            j.title as job_title,
+            j.department,
+            j.required_skills,
+            j.experience_level,
+            j.description as job_description,
+            ROW_NUMBER() OVER (ORDER BY a.match_percentage DESC, a.applied_at DESC) as ranking
+        FROM applications a
+        JOIN job_positions j ON a.job_position_id = j.id
+        JOIN users u ON a.candidate_id = u.id
+        WHERE 1=1
+    ";
 
-$params = [];
-$types = '';
+    $params = [];
+    $types = '';
 
-if ($filter_job_id) {
-    $query .= " AND a.job_position_id = ?";
-    $params[] = $filter_job_id;
-    $types .= 'i';
-}
+    if ($filter_job_id) {
+        $query .= " AND a.job_position_id = ?";
+        $params[] = $filter_job_id;
+        $types .= 'i';
+    }
 
-// Apply status filter
-if ($status_filter && $status_filter !== 'all') {
-    $query .= " AND a.status = ?";
-    $params[] = $status_filter;
-    $types .= 's';
-}
+    // Apply status filter
+    if ($status_filter && $status_filter !== 'all') {
+        $query .= " AND a.status = ?";
+        $params[] = $status_filter;
+        $types .= 's';
+    }
 
-// Apply match percentage filter
-switch($match_filter) {
-    case '90-100':
-        $query .= " AND a.match_percentage >= 90";
-        break;
-    case '70-89':
-        $query .= " AND a.match_percentage >= 70 AND a.match_percentage < 90";
-        break;
-    case '50-69':
-        $query .= " AND a.match_percentage >= 50 AND a.match_percentage < 70";
-        break;
-    case 'below-50':
-        $query .= " AND a.match_percentage < 50";
-        break;
-}
+    // Apply match percentage filter
+    switch($match_filter) {
+        case '90-100':
+            $query .= " AND a.match_percentage >= 90";
+            break;
+        case '70-89':
+            $query .= " AND a.match_percentage >= 70 AND a.match_percentage < 90";
+            break;
+        case '50-69':
+            $query .= " AND a.match_percentage >= 50 AND a.match_percentage < 70";
+            break;
+        case 'below-50':
+            $query .= " AND a.match_percentage < 50";
+            break;
+    }
 
-$query .= " ORDER BY a.match_percentage DESC, a.applied_at DESC";
+    $query .= " ORDER BY a.match_percentage DESC, a.applied_at DESC";
 
-if ($params) {
-    $stmt = $connection->prepare($query);
-    if ($stmt) {
-        $stmt->bind_param($types, ...$params);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        if ($result) {
-            $applications = $result->fetch_all(MYSQLI_ASSOC);
+    if ($params) {
+        $stmt = $connection->prepare($query);
+        if ($stmt) {
+            $stmt->bind_param($types, ...$params);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($result) {
+                $applications = $result->fetch_all(MYSQLI_ASSOC);
+            } else {
+                $applications = [];
+            }
         } else {
             $applications = [];
+            $error = "Failed to prepare statement: " . $connection->error;
         }
     } else {
-        $applications = [];
-        $error = "Failed to prepare statement: " . $connection->error;
+        $stmt = $connection->query($query);
+        if ($stmt) {
+            $applications = $stmt->fetch_all(MYSQLI_ASSOC);
+        } else {
+            $applications = [];
+            $error = "Query failed: " . $connection->error;
+        }
     }
-} else {
-    $stmt = $connection->query($query);
-    if ($stmt) {
-        $applications = $stmt->fetch_all(MYSQLI_ASSOC);
-    } else {
-        $applications = [];
-        $error = "Query failed: " . $connection->error;
-    }
-}
 } catch(Exception $e) {
     $error = "Database error: " . $e->getMessage();
     $applications = [];
@@ -164,7 +364,7 @@ function formatExtractedData($data, $limit = 5) {
             min-height: 100vh;
         }
         
-        /* Include all the sidebar and main styles from your original file */
+        /* Sidebar Styles */
         .sidebar {
             width: 280px;
             background: linear-gradient(180deg, #2B4C8C 0%, #1e3a75 100%);
@@ -269,6 +469,7 @@ function formatExtractedData($data, $limit = 5) {
             font-weight: bold;
         }
         
+        /* Main Content */
         .main-content {
             margin-left: 280px;
             flex: 1;
@@ -387,6 +588,21 @@ function formatExtractedData($data, $limit = 5) {
             color: white;
         }
         
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }
+        
+        .btn-secondary {
+            background: var(--secondary-color);
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #1e3a75;
+            transform: translateY(-1px);
+        }
+        
         .filter-form {
             display: flex;
             gap: 1rem;
@@ -400,92 +616,309 @@ function formatExtractedData($data, $limit = 5) {
             min-width: 200px;
         }
         
-        .candidate-card {
+        .table-container {
             background: white;
-            border-radius: 16px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            margin-bottom: 1.5rem;
+            border-radius: 12px;
             overflow: hidden;
-            border: 1px solid #e9ecef;
-            transition: all 0.3s ease;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            border: 1px solid #f1f3f4;
         }
-        
-        .candidate-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+
+        .applications-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
         }
-        
-        .candidate-header {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            padding: 1.5rem 2rem;
-            border-bottom: 1px solid #e9ecef;
+
+        .applications-table thead {
+            background: linear-gradient(135deg, var(--secondary-color) 0%, #1e3a75 100%);
         }
-        
-        .candidate-body {
-            padding: 2rem;
+
+        .applications-table th {
+            padding: 1.25rem 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: white;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: none;
+            position: relative;
         }
-        
-        .match-score {
-            position: absolute;
-            top: 1rem;
-            right: 1rem;
-            padding: 0.5rem 1rem;
-            border-radius: 25px;
+
+        .th-content {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .th-content span:first-child {
+            font-size: 1rem;
+        }
+
+        /* Column Widths */
+        .checkbox-col { width: 50px; text-align: center; }
+        .rank-col { width: 80px; text-align: center; }
+        .candidate-col { width: 250px; }
+        .job-col { width: 200px; }
+        .match-col { width: 120px; text-align: center; }
+        .date-col { width: 150px; }
+        .status-col { width: 140px; text-align: center; }
+        .actions-col { width: 180px; text-align: center; }
+
+        .applications-table td {
+            padding: 1.25rem 1rem;
+            border-bottom: 1px solid #f8f9fa;
+            vertical-align: middle;
+        }
+
+        .application-row {
+            transition: all 0.2s ease;
+            background: white;
+        }
+
+        .application-row:hover {
+            background: rgba(255, 107, 53, 0.02);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        /* Candidate Info Styles */
+        .candidate-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .candidate-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: var(--kabel-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
             font-weight: 700;
             font-size: 1.1rem;
+            flex-shrink: 0;
         }
-        
+
+        .candidate-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .candidate-name {
+            font-weight: 600;
+            color: var(--secondary-color);
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .candidate-email, .candidate-phone {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-bottom: 0.1rem;
+        }
+
+        .role-indicator {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-top: 0.25rem;
+        }
+
+        .role-candidate {
+            background: rgba(255, 193, 7, 0.1);
+            color: #856404;
+            border: 1px solid rgba(255, 193, 7, 0.2);
+        }
+
+        .role-employee {
+            background: rgba(102, 16, 242, 0.1);
+            color: #5a1a6b;
+            border: 1px solid rgba(102, 16, 242, 0.2);
+        }
+
+        /* Job Info Styles */
+        .job-info {
+            line-height: 1.4;
+        }
+
+        .job-title {
+            font-weight: 600;
+            color: var(--primary-color);
+            margin-bottom: 0.25rem;
+        }
+
+        .job-department, .job-level {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-bottom: 0.1rem;
+        }
+
+        /* Ranking Styles */
+        .ranking-container {
+            text-align: center;
+        }
+
+        .ranking-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: 1rem;
+            color: white;
+            margin-bottom: 0.25rem;
+        }
+
+        .ranking-1 {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            box-shadow: 0 3px 12px rgba(255, 215, 0, 0.4);
+        }
+
+        .ranking-2 {
+            background: linear-gradient(135deg, #C0C0C0, #A0A0A0);
+            box-shadow: 0 3px 12px rgba(192, 192, 192, 0.4);
+        }
+
+        .ranking-3 {
+            background: linear-gradient(135deg, #CD7F32, #B8860B);
+            box-shadow: 0 3px 12px rgba(205, 127, 50, 0.4);
+        }
+
+        .ranking-other {
+            background: linear-gradient(135deg, var(--secondary-color), #1e3a75);
+            box-shadow: 0 2px 8px rgba(43, 76, 140, 0.3);
+        }
+
+        .ranking-label {
+            font-size: 0.75rem;
+            color: #6c757d;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        /* Match Score Styles */
+        .match-container {
+            text-align: center;
+        }
+
+        .match-score {
+            display: inline-block;
+            padding: 0.5rem 0.75rem;
+            border-radius: 25px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            border: 2px solid;
+        }
+
         .match-excellent {
             background: rgba(34, 197, 94, 0.1);
             color: #166534;
-            border: 2px solid rgba(34, 197, 94, 0.3);
+            border-color: rgba(34, 197, 94, 0.3);
         }
-        
+
         .match-good {
             background: rgba(245, 158, 11, 0.1);
             color: #92400e;
-            border: 2px solid rgba(245, 158, 11, 0.3);
+            border-color: rgba(245, 158, 11, 0.3);
         }
-        
+
         .match-fair {
             background: rgba(249, 115, 22, 0.1);
             color: #9a3412;
-            border: 2px solid rgba(249, 115, 22, 0.3);
+            border-color: rgba(249, 115, 22, 0.3);
         }
-        
+
         .match-poor {
             background: rgba(239, 68, 68, 0.1);
             color: #991b1b;
-            border: 2px solid rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.3);
         }
-        
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
+
+        .match-bar {
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            width: 60px;
+            margin: 0 auto;
         }
-        
-        .info-section {
-            background: #f8f9fa;
-            padding: 1.5rem;
-            border-radius: 12px;
-            border-left: 4px solid var(--primary-color);
+
+        .match-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s ease;
         }
-        
-        .info-section h4 {
-            color: var(--secondary-color);
-            margin-bottom: 0.75rem;
-            font-size: 1.1rem;
+
+        .match-fill.match-excellent {
+            background: linear-gradient(90deg, #10b981, #059669);
+        }
+
+        .match-fill.match-good {
+            background: linear-gradient(90deg, #f59e0b, #d97706);
+        }
+
+        .match-fill.match-fair {
+            background: linear-gradient(90deg, #f97316, #ea580c);
+        }
+
+        .match-fill.match-poor {
+            background: linear-gradient(90deg, #ef4444, #dc2626);
+        }
+
+        /* Date Info Styles */
+        .date-info {
+            text-align: center;
+            line-height: 1.3;
+        }
+
+        .date-main {
             font-weight: 600;
+            color: var(--secondary-color);
+            margin-bottom: 0.25rem;
         }
-        
-        .info-section p {
+
+        .date-time {
+            font-size: 0.85rem;
             color: #6c757d;
-            line-height: 1.5;
-            margin: 0;
+            margin-bottom: 0.1rem;
         }
-        
+
+        .date-relative {
+            font-size: 0.75rem;
+            color: #9ca3af;
+            font-style: italic;
+        }
+
+        /* Action Buttons */
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .btn-xs {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+            border-radius: 8px;
+            font-weight: 500;
+            min-width: 80px;
+            text-align: center;
+        }
+
+        /* Status Badges */
         .status-badge {
             display: inline-block;
             padding: 0.375rem 0.75rem;
@@ -514,439 +947,243 @@ function formatExtractedData($data, $limit = 5) {
             border: 1px solid rgba(220, 53, 69, 0.2);
         }
         
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
+        .status-hired {
+            background: rgba(102, 16, 242, 0.1);
+            color: #5a1a6b;
+            border: 1px solid rgba(102, 16, 242, 0.2);
         }
         
-        .stat-box {
-            background: white;
-            padding: 1.5rem;
+        .status-waiting-interview {
+            background: rgba(23, 162, 184, 0.1);
+            color: #155160;
+            border: 1px solid rgba(23, 162, 184, 0.2);
+        }
+
+        /* Bulk Actions Enhancement */
+        .bulk-actions {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 1.25rem;
             border-radius: 12px;
+            margin-bottom: 1.5rem;
+            border: 1px solid #e9ecef;
+        }
+
+        /* Enhanced Empty State */
+        .empty-state {
             text-align: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-left: 4px solid;
+            padding: 4rem 2rem;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            border-radius: 16px;
+            border: 2px dashed #e9ecef;
         }
-        
-        .stat-box.excellent {
-            border-left-color: #10b981;
+
+        .empty-state .icon {
+            font-size: 5rem;
+            margin-bottom: 1.5rem;
+            opacity: 0.4;
         }
-        
-        .stat-box.good {
-            border-left-color: #f59e0b;
-        }
-        
-        .stat-box.fair {
-            border-left-color: #f97316;
-        }
-        
-        .stat-box.poor {
-            border-left-color: #ef4444;
-        }
-        
-        .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
+
+        .empty-state h3 {
             color: var(--secondary-color);
+            margin-bottom: 0.75rem;
+            font-size: 1.5rem;
         }
-        
-        .stat-label {
-            font-size: 0.9rem;
+
+        .empty-state p {
             color: #6c757d;
-            margin-top: 0.5rem;
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+
+        /* Card Header Fix */
+        .card-header .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .card-header .header-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .application-count {
+            color: rgba(255,255,255,0.8);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+
+        /* Modal Styles */
+        .modal {
+            position: fixed;
+            z-index: 10000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 10px 50px rgba(0,0,0,0.3);
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from { opacity: 0; transform: translateY(-50px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-header {
+            background: var(--kabel-gradient);
+            color: white;
+            padding: 1.5rem 2rem;
+            border-radius: 16px 16px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+        }
+
+        .close {
+            font-size: 1.5rem;
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: white;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.3s ease;
+        }
+
+        .close:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        .modal-body {
+            padding: 2rem;
+        }
+
+        .modal-footer {
+            padding: 1rem 2rem 2rem;
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        /* Alert Styles */
+        .alert {
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .alert-danger {
+            background: rgba(220, 53, 69, 0.1);
+            color: #721c24;
+            border: 1px solid rgba(220, 53, 69, 0.2);
+        }
+
+        .alert-success {
+            background: rgba(40, 167, 69, 0.1);
+            color: #155724;
+            border: 1px solid rgba(40, 167, 69, 0.2);
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .applications-table {
+                font-size: 0.8rem;
+            }
+            
+            .applications-table th,
+            .applications-table td {
+                padding: 1rem 0.75rem;
+            }
+            
+            .candidate-info {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.75rem;
+            }
+            
+            .action-buttons {
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 0.25rem;
+            }
+            
+            .btn-xs {
+                font-size: 0.7rem;
+                padding: 0.25rem 0.5rem;
+                min-width: 70px;
+            }
+            
+            /* Hide less important columns on mobile */
+            .rank-col,
+            .date-col {
+                display: none;
+            }
+            
+            .candidate-col,
+            .job-col {
+                width: auto;
+            }
+            
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            
+            .sidebar.active {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+            
+            .mobile-toggle {
+                display: block;
+                position: fixed;
+                top: 1rem;
+                left: 1rem;
+                z-index: 1001;
+                background: var(--primary-color);
+                color: white;
+                border: none;
+                padding: 0.75rem;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 1.2rem;
+            }
         }
         
         .mobile-toggle {
             display: none;
         }
-        
-        .match-label {
-    font-size: 0.75rem;
-    color: #6c757d;
-    font-weight: 500;
-    margin-top: 0.25rem;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-        
-.table-container {
-    background: white;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-    border: 1px solid #f1f3f4;
-}
 
-.applications-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9rem;
-}
-
-.applications-table thead {
-    background: linear-gradient(135deg, var(--secondary-color) 0%, #1e3a75 100%);
-}
-
-.applications-table th {
-    padding: 1.25rem 1rem;
-    text-align: left;
-    font-weight: 600;
-    color: white;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border: none;
-    position: relative;
-}
-
-.th-content {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.th-content span:first-child {
-    font-size: 1rem;
-}
-
-/* Column Widths */
-.checkbox-col { width: 50px; text-align: center; }
-.rank-col { width: 80px; text-align: center; }
-.candidate-col { width: 250px; }
-.job-col { width: 200px; }
-.match-col { width: 120px; text-align: center; }
-.date-col { width: 150px; }
-.status-col { width: 140px; text-align: center; }
-.actions-col { width: 180px; text-align: center; }
-
-.applications-table td {
-    padding: 1.25rem 1rem;
-    border-bottom: 1px solid #f8f9fa;
-    vertical-align: middle;
-}
-
-.application-row {
-    transition: all 0.2s ease;
-    background: white;
-}
-
-.application-row:hover {
-    background: rgba(255, 107, 53, 0.02);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
-
-/* Candidate Info Styles */
-.candidate-info {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-}
-
-.candidate-avatar {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    background: var(--kabel-gradient);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    font-weight: 700;
-    font-size: 1.1rem;
-    flex-shrink: 0;
-}
-
-.candidate-details {
-    flex: 1;
-    min-width: 0;
-}
-
-.candidate-name {
-    font-weight: 600;
-    color: var(--secondary-color);
-    font-size: 1rem;
-    margin-bottom: 0.25rem;
-}
-
-.candidate-email, .candidate-phone {
-    font-size: 0.85rem;
-    color: #6c757d;
-    margin-bottom: 0.1rem;
-}
-
-/* Job Info Styles */
-.job-info {
-    line-height: 1.4;
-}
-
-.job-title {
-    font-weight: 600;
-    color: var(--primary-color);
-    margin-bottom: 0.25rem;
-}
-
-.job-department, .job-level {
-    font-size: 0.85rem;
-    color: #6c757d;
-    margin-bottom: 0.1rem;
-}
-
-/* Ranking Styles */
-.ranking-container {
-    text-align: center;
-}
-
-.ranking-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    font-weight: 700;
-    font-size: 1rem;
-    color: white;
-    margin-bottom: 0.25rem;
-}
-
-.ranking-1 {
-    background: linear-gradient(135deg, #FFD700, #FFA500);
-    box-shadow: 0 3px 12px rgba(255, 215, 0, 0.4);
-}
-
-.ranking-2 {
-    background: linear-gradient(135deg, #C0C0C0, #A0A0A0);
-    box-shadow: 0 3px 12px rgba(192, 192, 192, 0.4);
-}
-
-.ranking-3 {
-    background: linear-gradient(135deg, #CD7F32, #B8860B);
-    box-shadow: 0 3px 12px rgba(205, 127, 50, 0.4);
-}
-
-.ranking-other {
-    background: linear-gradient(135deg, var(--secondary-color), #1e3a75);
-    box-shadow: 0 2px 8px rgba(43, 76, 140, 0.3);
-}
-
-.ranking-label {
-    font-size: 0.75rem;
-    color: #6c757d;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
-}
-
-/* Match Score Styles */
-.match-container {
-    text-align: center;
-}
-
-.match-score {
-    display: inline-block;
-    padding: 0.5rem 0.75rem;
-    border-radius: 25px;
-    font-weight: 700;
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-    border: 2px solid;
-}
-
-.match-excellent {
-    background: rgba(34, 197, 94, 0.1);
-    color: #166534;
-    border-color: rgba(34, 197, 94, 0.3);
-}
-
-.match-good {
-    background: rgba(245, 158, 11, 0.1);
-    color: #92400e;
-    border-color: rgba(245, 158, 11, 0.3);
-}
-
-.match-fair {
-    background: rgba(249, 115, 22, 0.1);
-    color: #9a3412;
-    border-color: rgba(249, 115, 22, 0.3);
-}
-
-.match-poor {
-    background: rgba(239, 68, 68, 0.1);
-    color: #991b1b;
-    border-color: rgba(239, 68, 68, 0.3);
-}
-
-.match-bar {
-    height: 6px;
-    background: #e9ecef;
-    border-radius: 3px;
-    overflow: hidden;
-    width: 60px;
-    margin: 0 auto;
-}
-
-.match-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.6s ease;
-}
-
-.match-fill.match-excellent {
-    background: linear-gradient(90deg, #10b981, #059669);
-}
-
-.match-fill.match-good {
-    background: linear-gradient(90deg, #f59e0b, #d97706);
-}
-
-.match-fill.match-fair {
-    background: linear-gradient(90deg, #f97316, #ea580c);
-}
-
-.match-fill.match-poor {
-    background: linear-gradient(90deg, #ef4444, #dc2626);
-}
-
-/* Date Info Styles */
-.date-info {
-    text-align: center;
-    line-height: 1.3;
-}
-
-.date-main {
-    font-weight: 600;
-    color: var(--secondary-color);
-    margin-bottom: 0.25rem;
-}
-
-.date-time {
-    font-size: 0.85rem;
-    color: #6c757d;
-    margin-bottom: 0.1rem;
-}
-
-.date-relative {
-    font-size: 0.75rem;
-    color: #9ca3af;
-    font-style: italic;
-}
-
-/* Action Buttons */
-.action-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    align-items: center;
-}
-
-.btn-xs {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.75rem;
-    border-radius: 8px;
-    font-weight: 500;
-    min-width: 80px;
-    text-align: center;
-}
-
-/* Bulk Actions Enhancement */
-.bulk-actions {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    padding: 1.25rem;
-    border-radius: 12px;
-    margin-bottom: 1.5rem;
-    border: 1px solid #e9ecef;
-}
-
-/* Enhanced Empty State */
-.empty-state {
-    text-align: center;
-    padding: 4rem 2rem;
-    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-    border-radius: 16px;
-    border: 2px dashed #e9ecef;
-}
-
-.empty-state .icon {
-    font-size: 5rem;
-    margin-bottom: 1.5rem;
-    opacity: 0.4;
-}
-
-.empty-state h3 {
-    color: var(--secondary-color);
-    margin-bottom: 0.75rem;
-    font-size: 1.5rem;
-}
-
-.empty-state p {
-    color: #6c757d;
-    font-size: 1rem;
-    line-height: 1.5;
-}
-
-/* Card Header Fix */
-.card-header .header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.card-header .header-right {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-}
-
-.application-count {
-    color: rgba(255,255,255,0.8);
-    font-size: 0.9rem;
-    font-weight: 500;
-}
-
-/* Mobile Responsive */
-@media (max-width: 768px) {
-    .applications-table {
-        font-size: 0.8rem;
-    }
-    
-    .applications-table th,
-    .applications-table td {
-        padding: 1rem 0.75rem;
-    }
-    
-    .candidate-info {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.75rem;
-    }
-    
-    .action-buttons {
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 0.25rem;
-    }
-    
-    .btn-xs {
-        font-size: 0.7rem;
-        padding: 0.25rem 0.5rem;
-        min-width: 70px;
-    }
-    
-    /* Hide less important columns on mobile */
-    .rank-col,
-    .date-col {
-        display: none;
-    }
-    
-    .candidate-col,
-    .job-col {
-        width: auto;
-    }
-}
-
-/* Custom Scrollbar */
+        /* Custom Scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
         }
@@ -978,7 +1215,7 @@ function formatExtractedData($data, $limit = 5) {
         
         <ul class="sidebar-nav">
             <li>
-                <a href="hr-dashboard.php" >
+                <a href="hr-dashboard.php">
                     <span class="icon">📊</span>
                     <span>Dashboard</span>
                 </a>
@@ -1038,14 +1275,14 @@ function formatExtractedData($data, $limit = 5) {
         </div>
 
         <div class="content-area">
-            <?php if (isset($error)): ?>
+            <?php if (isset($error) && !empty($error)): ?>
                 <div class="alert alert-danger">
                     <span>⚠️</span>
                     <div><strong>Error:</strong> <?php echo htmlspecialchars($error); ?></div>
                 </div>
             <?php endif; ?>
 
-            <?php if (isset($success)): ?>
+            <?php if (isset($success) && !empty($success)): ?>
                 <div class="alert alert-success">
                     <span>✅</span>
                     <div><strong>Success:</strong> <?php echo htmlspecialchars($success); ?></div>
@@ -1136,6 +1373,7 @@ function formatExtractedData($data, $limit = 5) {
                                     <option value="approve_selected">✅ Approve Selected</option>
                                     <option value="reject_selected">❌ Reject Selected</option>
                                     <option value="interview_selected">📞 Schedule Interview</option>
+                                    <option value="hire_selected">👔 Hire Selected</option>
                                 </select>
                                 <button type="submit" class="btn btn-secondary btn-sm">Apply Action</button>
                             </div>
@@ -1193,7 +1431,12 @@ function formatExtractedData($data, $limit = 5) {
                                                         <span>Status</span>
                                                     </div>
                                                 </th>
-                                                
+                                                <th class="actions-col">
+                                                    <div class="th-content">
+                                                        <span>⚙️</span>
+                                                        <span>Actions</span>
+                                                    </div>
+                                                </th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1244,6 +1487,15 @@ function formatExtractedData($data, $limit = 5) {
                                                                     }
                                                                 }
                                                                 ?>
+                                                                <!-- Role Indicator -->
+                                                                <div class="role-indicator role-<?php echo $app['current_role']; ?>">
+                                                                    <?php 
+                                                                    echo ucfirst($app['current_role']); 
+                                                                    if ($app['current_role'] === 'employee' && !empty($app['current_department'])) {
+                                                                        echo ' - ' . $app['current_department'];
+                                                                    }
+                                                                    ?>
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </td>
@@ -1260,15 +1512,26 @@ function formatExtractedData($data, $limit = 5) {
                                                             </div>
                                                         </div>
                                                     </td>
-<td class="match-col" style="text-align: center;">
-    <?php 
-    $percentage = is_numeric($app['match_percentage']) ? floatval($app['match_percentage']) : 0;
-    ?>
-    <span style="font-size: 1.3rem; font-weight: 800; color: #2B4C8C;">
-        <?php echo $percentage > 0 ? number_format($percentage, 1) . '%' : 'N/A'; ?>
-    </span>
-</td>
-                                                    
+                                                    <td class="match-col">
+                                                        <div class="match-container">
+                                                            <?php 
+                                                            $percentage = is_numeric($app['match_percentage']) ? floatval($app['match_percentage']) : 0;
+                                                            $matchClass = '';
+                                                            if ($percentage >= 90) $matchClass = 'match-excellent';
+                                                            elseif ($percentage >= 70) $matchClass = 'match-good';
+                                                            elseif ($percentage >= 50) $matchClass = 'match-fair';
+                                                            else $matchClass = 'match-poor';
+                                                            ?>
+                                                            <span class="match-score <?php echo $matchClass; ?>">
+                                                                <?php echo $percentage > 0 ? number_format($percentage, 1) . '%' : 'N/A'; ?>
+                                                            </span>
+                                                            <?php if ($percentage > 0): ?>
+                                                            <div class="match-bar">
+                                                                <div class="match-fill <?php echo $matchClass; ?>" style="width: <?php echo $percentage; ?>%"></div>
+                                                            </div>
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </td>
                                                     <td class="date-col">
                                                         <div class="date-info">
                                                             <div class="date-main">
@@ -1286,19 +1549,25 @@ function formatExtractedData($data, $limit = 5) {
                                                         </div>
                                                     </td>
                                                     <td class="status-col">
-    <?php 
-    // Debug: Let's see what status we're getting
-    $currentStatus = $app['status'];
-    // Uncomment the next line temporarily to debug:
-    // echo "<!-- Debug Status for " . $app['candidate_name'] . ": '" . $currentStatus . "' -->";
-    ?>
-    <span class="status-badge status-<?php echo str_replace('_', '-', $currentStatus); ?>">
-        
-        <?php echo ucwords(str_replace('_', ' ', $currentStatus)); ?>
-    </span>
-    
-</td>
-                                                    
+                                                        <?php 
+                                                        $currentStatus = $app['status'];
+                                                        ?>
+                                                        <span class="status-badge status-<?php echo str_replace('_', '-', $currentStatus); ?>">
+                                                            <?php echo ucwords(str_replace('_', ' ', $currentStatus)); ?>
+                                                        </span>
+                                                    </td>
+                                                    <td class="actions-col">
+                                                        <div class="action-buttons">
+                                                            <button type="button" class="btn btn-primary btn-xs" 
+                                                                    onclick="openStatusModal(<?php echo $app['id']; ?>, '<?php echo $currentStatus; ?>', '<?php echo addslashes($app['hr_notes'] ?? ''); ?>')">
+                                                                ✏️ Update
+                                                            </button>
+                                                            <a href="view-application.php?id=<?php echo $app['id']; ?>" 
+                                                               class="btn btn-outline btn-xs">
+                                                                👁️ View
+                                                            </a>
+                                                        </div>
+                                                    </td>
                                                 </tr>
                                             <?php endforeach; ?>
                                         </tbody>
@@ -1333,7 +1602,7 @@ function formatExtractedData($data, $limit = 5) {
                                     <option value="offer_sent">Offer Sent</option>
                                     <option value="offer_accepted">Offer Accepted</option>
                                     <option value="offer_rejected">Offer Rejected</option>
-                                    <option value="hired">Hired</option>
+                                    <option value="hired">Hired (Convert to Employee)</option>
                                 </select>
                             </div>
                             
@@ -1341,6 +1610,13 @@ function formatExtractedData($data, $limit = 5) {
                                 <label class="form-label">HR Notes</label>
                                 <textarea name="notes" id="modalNotes" class="form-control" rows="4" 
                                           placeholder="Add notes about this candidate..."></textarea>
+                            </div>
+                            
+                            <div id="hireWarning" class="alert alert-success" style="display: none;">
+                                <span>✅</span>
+                                <div>
+                                    <strong>Note:</strong> Selecting "Hired" will automatically convert this candidate to an employee and create their onboarding tasks, training modules, and required documents.
+                                </div>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -1351,120 +1627,12 @@ function formatExtractedData($data, $limit = 5) {
                 </div>
             </div>
 
-            <style>
-            /* Modal Styles */
-            .modal {
-                position: fixed;
-                z-index: 10000;
-                left: 0;
-                top: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(0,0,0,0.5);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-
-            .modal-content {
-                background: white;
-                border-radius: 16px;
-                width: 90%;
-                max-width: 500px;
-                box-shadow: 0 10px 50px rgba(0,0,0,0.3);
-                animation: modalSlideIn 0.3s ease;
-            }
-
-            @keyframes modalSlideIn {
-                from { opacity: 0; transform: translateY(-50px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
-
-            .modal-header {
-                background: var(--kabel-gradient);
-                color: white;
-                padding: 1.5rem 2rem;
-                border-radius: 16px 16px 0 0;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-
-            .modal-header h3 {
-                margin: 0;
-            }
-
-            .close {
-                font-size: 1.5rem;
-                cursor: pointer;
-                background: none;
-                border: none;
-                color: white;
-                padding: 0;
-                width: 30px;
-                height: 30px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 50%;
-                transition: background 0.3s ease;
-            }
-
-            .close:hover {
-                background: rgba(255,255,255,0.2);
-            }
-
-            .modal-body {
-                padding: 2rem;
-            }
-
-            .modal-footer {
-                padding: 1rem 2rem 2rem;
-                display: flex;
-                gap: 1rem;
-                justify-content: flex-end;
-            }
-
-            /* Alert Styles */
-            .alert {
-                padding: 1rem 1.5rem;
-                margin-bottom: 1.5rem;
-                border-radius: 12px;
-                display: flex;
-                align-items: center;
-                gap: 1rem;
-                transition: all 0.3s ease;
-            }
-
-            .alert-danger {
-                background: rgba(220, 53, 69, 0.1);
-                color: #721c24;
-                border: 1px solid rgba(220, 53, 69, 0.2);
-            }
-
-            .alert-success {
-                background: rgba(40, 167, 69, 0.1);
-                color: #155724;
-                border: 1px solid rgba(40, 167, 69, 0.2);
-            }
-
-            .btn-sm {
-                padding: 0.5rem 1rem;
-                font-size: 0.875rem;
-            }
-
-            .btn-secondary {
-                background: var(--secondary-color);
-                color: white;
-            }
-
-            .btn-secondary:hover {
-                background: #1e3a75;
-                transform: translateY(-1px);
-            }
-            </style>
-
             <script>
+            function toggleSidebar() {
+                const sidebar = document.getElementById('sidebar');
+                sidebar.classList.toggle('active');
+            }
+
             function toggleSelectAll() {
                 const selectAll = document.getElementById('selectAll');
                 const selectAllHeader = document.getElementById('selectAllHeader');
@@ -1486,11 +1654,28 @@ function formatExtractedData($data, $limit = 5) {
                 document.getElementById('modalStatus').value = currentStatus;
                 document.getElementById('modalNotes').value = currentNotes;
                 document.getElementById('statusModal').style.display = 'flex';
+                
+                // Show/hide hire warning
+                toggleHireWarning(currentStatus);
             }
 
             function closeModal() {
                 document.getElementById('statusModal').style.display = 'none';
             }
+
+            function toggleHireWarning(status) {
+                const hireWarning = document.getElementById('hireWarning');
+                if (status === 'hired') {
+                    hireWarning.style.display = 'flex';
+                } else {
+                    hireWarning.style.display = 'none';
+                }
+            }
+
+            // Add event listener for status change
+            document.getElementById('modalStatus').addEventListener('change', function() {
+                toggleHireWarning(this.value);
+            });
 
             // Close modal when clicking outside
             window.onclick = function(event) {
@@ -1508,8 +1693,19 @@ function formatExtractedData($data, $limit = 5) {
                 const rows = table.querySelectorAll('tr');
                 let csv = [];
                 
-                rows.forEach(row => {
-                    const cols = row.querySelectorAll('td, th');
+                // Add header row
+                const headerCols = rows[0].querySelectorAll('th');
+                const headerData = [];
+                headerCols.forEach((col, index) => {
+                    if (index > 0 && index < headerCols.length - 1) { // Skip checkbox and actions columns
+                        headerData.push('"' + col.textContent.trim().replace(/"/g, '""') + '"');
+                    }
+                });
+                csv.push(headerData.join(','));
+                
+                // Add data rows
+                for (let i = 1; i < rows.length; i++) {
+                    const cols = rows[i].querySelectorAll('td');
                     const rowData = [];
                     cols.forEach((col, index) => {
                         if (index > 0 && index < cols.length - 1) { // Skip checkbox and actions columns
@@ -1519,7 +1715,7 @@ function formatExtractedData($data, $limit = 5) {
                     if (rowData.length > 0) {
                         csv.push(rowData.join(','));
                     }
-                });
+                }
                 
                 const csvContent = csv.join('\n');
                 const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1537,11 +1733,134 @@ function formatExtractedData($data, $limit = 5) {
             setTimeout(() => {
                 const alerts = document.querySelectorAll('.alert');
                 alerts.forEach(alert => {
-                    alert.style.opacity = '0';
-                    alert.style.transform = 'translateY(-20px)';
-                    setTimeout(() => alert.remove(), 300);
+                    if (!alert.id || alert.id !== 'hireWarning') { // Don't auto-hide the hire warning
+                        alert.style.opacity = '0';
+                        alert.style.transform = 'translateY(-20px)';
+                        setTimeout(() => {
+                            if (alert.parentNode) {
+                                alert.remove();
+                            }
+                        }, 300);
+                    }
                 });
             }, 5000);
+
+            // Enhanced bulk form validation
+            document.getElementById('bulkForm').addEventListener('submit', function(e) {
+                const selectedCheckboxes = document.querySelectorAll('.app-checkbox:checked');
+                const bulkAction = document.querySelector('select[name="bulk_action"]').value;
+                
+                if (selectedCheckboxes.length === 0) {
+                    e.preventDefault();
+                    alert('Please select at least one application.');
+                    return;
+                }
+                
+                if (!bulkAction) {
+                    e.preventDefault();
+                    alert('Please select an action to perform.');
+                    return;
+                }
+                
+                // Special confirmation for hire action
+                if (bulkAction === 'hire_selected') {
+                    const confirmed = confirm(`Are you sure you want to hire ${selectedCheckboxes.length} selected candidate(s)? This will convert them to employees and create their onboarding materials.`);
+                    if (!confirmed) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
+                
+                // Show processing indicator
+                const submitBtn = this.querySelector('button[type="submit"]');
+                const originalText = submitBtn.textContent;
+                submitBtn.textContent = 'Processing...';
+                submitBtn.disabled = true;
+                
+                // Re-enable button after form submission (in case of errors)
+                setTimeout(() => {
+                    submitBtn.textContent = originalText;
+                    submitBtn.disabled = false;
+                }, 3000);
+            });
+
+            // Status form validation
+            document.getElementById('statusForm').addEventListener('submit', function(e) {
+                const status = document.getElementById('modalStatus').value;
+                
+                if (status === 'hired') {
+                    const confirmed = confirm('Are you sure you want to hire this candidate? This will convert them to an employee and create their onboarding materials.');
+                    if (!confirmed) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
+                
+                // Show processing indicator
+                const submitBtn = this.querySelector('button[type="submit"]');
+                const originalText = submitBtn.textContent;
+                submitBtn.textContent = 'Processing...';
+                submitBtn.disabled = true;
+                
+                // Re-enable button after form submission (in case of errors)
+                setTimeout(() => {
+                    submitBtn.textContent = originalText;
+                    submitBtn.disabled = false;
+                }, 3000);
+            });
+
+            // Initialize page
+            document.addEventListener('DOMContentLoaded', function() {
+                // Add loading states to action buttons
+                const actionButtons = document.querySelectorAll('.action-buttons .btn');
+                actionButtons.forEach(button => {
+                    if (button.href && button.href.includes('view-application.php')) {
+                        button.addEventListener('click', function() {
+                            this.innerHTML = '⏳ Loading...';
+                            this.style.pointerEvents = 'none';
+                        });
+                    }
+                });
+                
+                // Add hover effects to rows
+                const rows = document.querySelectorAll('.application-row');
+                rows.forEach(row => {
+                    row.addEventListener('mouseenter', function() {
+                        this.style.backgroundColor = 'rgba(255, 107, 53, 0.03)';
+                    });
+                    
+                    row.addEventListener('mouseleave', function() {
+                        this.style.backgroundColor = 'white';
+                    });
+                });
+                
+                // Enhanced checkbox interactions
+                const checkboxes = document.querySelectorAll('.app-checkbox');
+                checkboxes.forEach(checkbox => {
+                    checkbox.addEventListener('change', function() {
+                        const row = this.closest('tr');
+                        if (this.checked) {
+                            row.style.backgroundColor = 'rgba(255, 107, 53, 0.05)';
+                        } else {
+                            row.style.backgroundColor = 'white';
+                        }
+                    });
+                });
+            });
+
+            // Add smooth scrolling for better UX
+            document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+                anchor.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const target = document.querySelector(this.getAttribute('href'));
+                    if (target) {
+                        target.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                    }
+                });
+            });
             </script>
         </div>
     </div>

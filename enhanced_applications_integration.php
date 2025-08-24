@@ -295,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_integration'])) 
     
     <hr style="margin: 30px 0;">
     <div>
-        <a href="candidate-upload.php" class="button">📄 Upload Resume</a>
+        <a href="candidate-dashboard.php" class="button">📄 Upload Resume</a>
         <a href="test_api.php" class="button secondary">🔧 Test API</a>
         <a href="hr-dashboard.php" class="button secondary">📊 HR Dashboard</a>
     </div>

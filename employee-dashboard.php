@@ -16,14 +16,17 @@ if (!isset($connection) || $connection->connect_error) {
     die("Database connection failed. Please check your database configuration.");
 }
 
-// Ensure Employee access only
+// Handle role transitions and redirect if needed
+handleRoleRedirect($connection, 'employee-dashboard.php');
+
+// Ensure Employee access only (after checking for role transitions)
 requireRole('employee');
 
 $user_id = $_SESSION['user_id'];
 
-// Get employee info with job position
+// Get employee info with job position - refresh from database to ensure latest data
 $stmt = $connection->prepare("
-    SELECT u.*, jp.title as job_title, jp.department 
+    SELECT u.*, jp.title as job_title, jp.department as job_department, jp.description as job_description
     FROM users u 
     LEFT JOIN job_positions jp ON u.job_position_id = jp.id 
     WHERE u.id = ?
@@ -32,79 +35,127 @@ $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $employee = $stmt->get_result()->fetch_assoc();
 
+// Update session if data has changed
+if ($employee) {
+    $_SESSION['full_name'] = $employee['full_name'];
+    $_SESSION['email'] = $employee['email'];
+    $_SESSION['department'] = $employee['department'];
+    $_SESSION['job_position_id'] = $employee['job_position_id'];
+}
+
+// Determine department for queries (prefer job department over user department)
+$user_department = $employee['job_department'] ?: $employee['department'] ?: 'General';
+
 // Get overall progress stats
 try {
     // Onboarding tasks progress
-    $stmt = $connection->query("
+    $stmt = $connection->prepare("
         SELECT 
             COUNT(*) as total_tasks,
             SUM(CASE WHEN eo.status = 'completed' THEN 1 ELSE 0 END) as completed_tasks
         FROM onboarding_tasks ot
-        LEFT JOIN employee_onboarding eo ON ot.id = eo.task_id AND eo.employee_id = $user_id
-        WHERE ot.is_mandatory = 1
+        LEFT JOIN employee_onboarding eo ON ot.id = eo.task_id AND eo.employee_id = ?
+        WHERE ot.is_mandatory = 1 AND (ot.department = 'ALL' OR ot.department = ?)
     ");
-    $task_progress = $stmt->fetch_assoc();
+    $stmt->bind_param("is", $user_id, $user_department);
+    $stmt->execute();
+    $task_progress = $stmt->get_result()->fetch_assoc();
     $task_completion = $task_progress['total_tasks'] > 0 ? round(($task_progress['completed_tasks'] / $task_progress['total_tasks']) * 100) : 0;
     
     // Training modules progress
-    $stmt = $connection->query("
+    $stmt = $connection->prepare("
         SELECT 
             COUNT(*) as total_modules,
-            SUM(CASE WHEN et.status = 'completed' THEN 1 ELSE 0 END) as completed_modules
+            SUM(CASE WHEN et.status = 'completed' THEN 1 ELSE 0 END) as completed_modules,
+            AVG(CASE WHEN et.progress_percentage IS NOT NULL THEN et.progress_percentage ELSE 0 END) as avg_progress
         FROM training_modules tm
-        LEFT JOIN employee_training et ON tm.id = et.module_id AND et.employee_id = $user_id
-        WHERE tm.is_mandatory = 1 AND (tm.department = 'ALL' OR tm.department = '{$employee['department']}')
+        LEFT JOIN employee_training et ON tm.id = et.module_id AND et.employee_id = ?
+        WHERE tm.is_mandatory = 1 AND (tm.department = 'ALL' OR tm.department = ?)
     ");
-    $training_progress = $stmt->fetch_assoc();
+    $stmt->bind_param("is", $user_id, $user_department);
+    $stmt->execute();
+    $training_progress = $stmt->get_result()->fetch_assoc();
     $training_completion = $training_progress['total_modules'] > 0 ? round(($training_progress['completed_modules'] / $training_progress['total_modules']) * 100) : 0;
+    $training_avg_progress = round($training_progress['avg_progress'] ?: 0);
     
     // Documents progress
-    $stmt = $connection->query("
+    $stmt = $connection->prepare("
         SELECT 
             COUNT(*) as total_docs,
-            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_docs
+            SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved_docs,
+            SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END) as submitted_docs
         FROM employee_documents 
-        WHERE employee_id = $user_id AND is_required = 1
+        WHERE employee_id = ? AND is_required = 1
     ");
-    $doc_progress = $stmt->fetch_assoc();
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $doc_progress = $stmt->get_result()->fetch_assoc();
     $doc_completion = $doc_progress['total_docs'] > 0 ? round(($doc_progress['approved_docs'] / $doc_progress['total_docs']) * 100) : 0;
     
-    // Overall completion
-    $overall_completion = round(($task_completion + $training_completion + $doc_completion) / 3);
+    // Overall completion - use training average instead of just completion
+    $overall_completion = round(($task_completion + $training_avg_progress + $doc_completion) / 3);
     
     // Recent activity (last 5 completed items)
-    $stmt = $connection->query("
+    $stmt = $connection->prepare("
         (SELECT 'task' as type, ot.task_name as name, eo.completed_at as date 
          FROM employee_onboarding eo 
          JOIN onboarding_tasks ot ON eo.task_id = ot.id 
-         WHERE eo.employee_id = $user_id AND eo.status = 'completed')
+         WHERE eo.employee_id = ? AND eo.status = 'completed')
         UNION ALL
         (SELECT 'training' as type, tm.module_name as name, et.completed_at as date 
          FROM employee_training et 
          JOIN training_modules tm ON et.module_id = tm.id 
-         WHERE et.employee_id = $user_id AND et.status = 'completed')
+         WHERE et.employee_id = ? AND et.status = 'completed')
         UNION ALL
-        (SELECT 'document' as type, document_name as name, uploaded_at as date 
+        (SELECT 'document' as type, document_name as name, 
+         CASE WHEN status = 'approved' THEN reviewed_at ELSE uploaded_at END as date 
          FROM employee_documents 
-         WHERE employee_id = $user_id AND status = 'approved')
+         WHERE employee_id = ? AND (status = 'approved' OR status = 'submitted'))
         ORDER BY date DESC 
         LIMIT 5
     ");
-    $recent_activity = $stmt->fetch_all(MYSQLI_ASSOC);
+    $stmt->bind_param("iii", $user_id, $user_id, $user_id);
+    $stmt->execute();
+    $recent_activity = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    
+    // Get pending tasks count
+    $stmt = $connection->prepare("
+        SELECT COUNT(*) as pending_count
+        FROM employee_onboarding eo
+        JOIN onboarding_tasks ot ON eo.task_id = ot.id
+        WHERE eo.employee_id = ? AND eo.status = 'pending'
+    ");
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $pending_tasks = $stmt->get_result()->fetch_assoc()['pending_count'];
+    
+    // Get support tickets count
+    $stmt = $connection->prepare("
+        SELECT 
+            COUNT(*) as total_tickets,
+            SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_tickets
+        FROM support_tickets 
+        WHERE employee_id = ?
+    ");
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $ticket_stats = $stmt->get_result()->fetch_assoc();
     
 } catch(Exception $e) {
     $error = "Database error: " . $e->getMessage();
     $task_completion = $training_completion = $doc_completion = $overall_completion = 0;
     $recent_activity = [];
+    $pending_tasks = 0;
+    $ticket_stats = ['total_tickets' => 0, 'open_tickets' => 0];
 }
 
-// Mock team information (in real implementation, this would come from HR database)
+// Team information - try to get from database, fallback to defaults
 $team_info = [
     'reporting_manager' => [
         'name' => 'Sarah Johnson',
         'email' => 'sarah.johnson@haircare2u.my',
         'phone' => '+60 12-345 6789',
-        'position' => 'Department Head - ' . ($employee['department'] ?: 'General')
+        'position' => 'Department Head - ' . $user_department
     ],
     'hr_contact' => [
         'name' => 'Lisa Wong',
@@ -112,10 +163,33 @@ $team_info = [
         'phone' => '+60 12-345 6790',
         'position' => 'HR Manager'
     ],
-    'department' => $employee['department'] ?: 'General',
-    'start_date' => $employee['created_at'],
+    'department' => $user_department,
+    'start_date' => $employee['updated_at'] ?: $employee['created_at'], // Use updated_at as it reflects when they became employee
     'employee_id' => 'HC2U-' . str_pad($employee['id'], 4, '0', STR_PAD_LEFT)
 ];
+
+// Welcome message based on how recently they became an employee
+$days_since_hired = 0;
+if ($employee['updated_at']) {
+    $days_since_hired = floor((time() - strtotime($employee['updated_at'])) / 86400);
+}
+
+$welcome_message = "Welcome to HairCare2U! 🎉";
+$welcome_subtitle = "You're doing great! Here's your onboarding progress overview.";
+
+if ($days_since_hired <= 1) {
+    $welcome_message = "Welcome to the team! 🎉";
+    $welcome_subtitle = "Congratulations on being hired! Let's get you started with your onboarding journey.";
+} elseif ($days_since_hired <= 7) {
+    $welcome_message = "Welcome to your first week! 🚀";
+    $welcome_subtitle = "You're off to a great start! Keep up the momentum with your onboarding tasks.";
+}
+
+// Check if user just transitioned from candidate to employee
+$show_transition_message = false;
+if (isset($_GET['transitioned']) && $_GET['transitioned'] === 'true') {
+    $show_transition_message = true;
+}
 ?>
 
 <!DOCTYPE html>
@@ -325,6 +399,57 @@ $team_info = [
             animation: pulse 2s ease-in-out infinite;
         }
         
+        /* Transition Welcome Message */
+        .transition-welcome {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border-radius: 16px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .transition-welcome::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, transparent 40%, rgba(255,255,255,0.1) 50%, transparent 60%);
+            animation: shimmer 3s ease-in-out infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .transition-welcome h2 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .transition-welcome p {
+            font-size: 1.2rem;
+            opacity: 0.95;
+            margin-bottom: 1.5rem;
+        }
+        
+        .transition-welcome .celebration {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            animation: bounce 2s ease-in-out infinite;
+        }
+        
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+            40% { transform: translateY(-10px); }
+            60% { transform: translateY(-5px); }
+        }
+        
         /* Cards */
         .card {
             background: white;
@@ -403,6 +528,12 @@ $team_info = [
             font-weight: 500;
         }
         
+        .progress-card .sub-label {
+            color: #9ca3af;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+        
         /* Quick Actions */
         .quick-actions {
             display: grid;
@@ -421,6 +552,7 @@ $team_info = [
             text-decoration: none;
             color: inherit;
             border-left: 4px solid;
+            position: relative;
         }
         
         .action-card:hover {
@@ -444,6 +576,22 @@ $team_info = [
         
         .action-card.help {
             border-left-color: var(--success-color);
+        }
+        
+        .action-card .notification-badge {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: #dc3545;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
         }
         
         .action-icon {
@@ -578,6 +726,12 @@ $team_info = [
             border-color: #28a745;
         }
         
+        .alert-info {
+            background: rgba(23, 162, 184, 0.1);
+            color: #0c5460;
+            border-color: #17a2b8;
+        }
+        
         /* Mobile Responsive */
         @media (max-width: 768px) {
             .sidebar {
@@ -686,39 +840,45 @@ $team_info = [
         
         <ul class="sidebar-nav">
             <li>
-                <a href="employee-dashboard.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'employee-dashboard.php' ? 'active' : ''; ?>">
+                <a href="employee-dashboard.php" class="active">
                     <span class="icon">🏠</span>
                     <span>Dashboard</span>
                 </a>
             </li>
             <li>
-                <a href="employee-profile.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'employee-profile.php' ? 'active' : ''; ?>">
+                <a href="employee-profile.php">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="onboarding-tasks.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'onboarding-tasks.php' ? 'active' : ''; ?>">
+                <a href="onboarding-tasks.php">
                     <span class="icon">📋</span>
                     <span>Onboarding Tasks</span>
+                    <?php if ($pending_tasks > 0): ?>
+                        <span class="notification-badge"><?php echo $pending_tasks; ?></span>
+                    <?php endif; ?>
                 </a>
             </li>
             <li>
-                <a href="training-modules.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'training-modules.php' ? 'active' : ''; ?>">
+                <a href="training-modules.php">
                     <span class="icon">🎓</span>
                     <span>Training Modules</span>
                 </a>
             </li>
             <li>
-                <a href="required-documents.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'required-documents.php' ? 'active' : ''; ?>">
+                <a href="required-documents.php">
                     <span class="icon">📄</span>
                     <span>Required Documents</span>
                 </a>
             </li>
             <li>
-                <a href="get-help.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'get-help.php' ? 'active' : ''; ?>">
+                <a href="get-help.php">
                     <span class="icon">❓</span>
                     <span>Get Help</span>
+                    <?php if ($ticket_stats['open_tickets'] > 0): ?>
+                        <span class="notification-badge"><?php echo $ticket_stats['open_tickets']; ?></span>
+                    <?php endif; ?>
                 </a>
             </li>
         </ul>
@@ -730,7 +890,7 @@ $team_info = [
                     <?php echo htmlspecialchars($employee['full_name']); ?>
                 </div>
                 <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem; margin-bottom: 1rem;">
-                    Employee
+                    <?php echo htmlspecialchars($user_department); ?> • Employee
                 </div>
                 <a href="logout.php" style="color: rgba(255,255,255,0.7); text-decoration: none; font-size: 0.8rem;">
                     🚪 Logout
@@ -760,13 +920,26 @@ $team_info = [
                 </div>
             <?php endif; ?>
 
+            <?php if ($show_transition_message): ?>
+                <!-- Special welcome message for newly transitioned employees -->
+                <div class="transition-welcome">
+                    <div class="celebration">🎊🎉🎊</div>
+                    <h2>Congratulations! You're Now Part of the Team!</h2>
+                    <p>You've been successfully hired and your account has been converted to employee status. Welcome to HairCare2U!</p>
+                    <div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 8px; margin-top: 1rem;">
+                        <strong>What's Next?</strong><br>
+                        Complete your onboarding tasks, training modules, and document submissions to get fully integrated into the team.
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <!-- Welcome Section -->
             <div class="welcome-section">
                 <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;">
                     <div style="flex: 1; min-width: 300px;">
-                        <h2 style="font-size: 2rem; margin-bottom: 1rem;">Welcome to HairCare2U! 🎉</h2>
+                        <h2 style="font-size: 2rem; margin-bottom: 1rem;"><?php echo $welcome_message; ?></h2>
                         <p style="font-size: 1.1rem; opacity: 0.9; margin-bottom: 1.5rem;">
-                            You're doing great! Here's your onboarding progress overview.
+                            <?php echo $welcome_subtitle; ?>
                         </p>
                         <?php if ($overall_completion == 100): ?>
                             <div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 8px;">
@@ -775,6 +948,10 @@ $team_info = [
                         <?php elseif ($overall_completion >= 75): ?>
                             <div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 8px;">
                                 <strong>🚀 Almost there!</strong> You're nearly done with your onboarding.
+                            </div>
+                        <?php elseif ($days_since_hired <= 1): ?>
+                            <div style="background: rgba(255,255,255,0.2); padding: 1rem; border-radius: 8px;">
+                                <strong>🌟 Getting Started!</strong> Take your time to explore and complete your initial tasks.
                             </div>
                         <?php endif; ?>
                     </div>
@@ -793,22 +970,32 @@ $team_info = [
                     <div class="icon">📋</div>
                     <div class="percentage"><?php echo $task_completion; ?>%</div>
                     <div class="label">Onboarding Tasks</div>
+                    <?php if ($pending_tasks > 0): ?>
+                        <div class="sub-label"><?php echo $pending_tasks; ?> tasks pending</div>
+                    <?php endif; ?>
                 </div>
                 <div class="progress-card">
                     <div class="icon">🎓</div>
-                    <div class="percentage"><?php echo $training_completion; ?>%</div>
-                    <div class="label">Training Modules</div>
+                    <div class="percentage"><?php echo $training_avg_progress; ?>%</div>
+                    <div class="label">Training Progress</div>
+                    <div class="sub-label">Average across all modules</div>
                 </div>
                 <div class="progress-card">
                     <div class="icon">📄</div>
                     <div class="percentage"><?php echo $doc_completion; ?>%</div>
                     <div class="label">Required Documents</div>
+                    <?php if ($doc_progress['submitted_docs'] > 0 && $doc_progress['approved_docs'] < $doc_progress['total_docs']): ?>
+                        <div class="sub-label">Some documents under review</div>
+                    <?php endif; ?>
                 </div>
             </div>
 
             <!-- Quick Actions -->
             <div class="quick-actions">
                 <a href="onboarding-tasks.php" class="action-card tasks">
+                    <?php if ($pending_tasks > 0): ?>
+                        <span class="notification-badge"><?php echo $pending_tasks; ?></span>
+                    <?php endif; ?>
                     <div class="action-icon">📋</div>
                     <div class="action-title">My Tasks</div>
                     <div class="action-description">View and complete onboarding tasks</div>
@@ -824,6 +1011,9 @@ $team_info = [
                     <div class="action-description">Upload and manage documents</div>
                 </a>
                 <a href="get-help.php" class="action-card help">
+                    <?php if ($ticket_stats['open_tickets'] > 0): ?>
+                        <span class="notification-badge"><?php echo $ticket_stats['open_tickets']; ?></span>
+                    <?php endif; ?>
                     <div class="action-icon">❓</div>
                     <div class="action-title">Get Help</div>
                     <div class="action-description">Need assistance? We're here to help</div>
@@ -864,10 +1054,15 @@ $team_info = [
                                 Department & Role
                             </div>
                             <div class="content">
-                                <strong>Department:</strong> <?php echo $team_info['department']; ?><br>
-                                <strong>Position:</strong> <?php echo $employee['job_title'] ?: 'Employee'; ?><br>
+                                <strong>Department:</strong> <?php echo htmlspecialchars($team_info['department']); ?><br>
+                                <strong>Position:</strong> <?php echo htmlspecialchars($employee['job_title'] ?: 'Employee'); ?><br>
                                 <strong>Employee ID:</strong> <?php echo $team_info['employee_id']; ?><br>
                                 <strong>Start Date:</strong> <?php echo date('M j, Y', strtotime($team_info['start_date'])); ?>
+                                <?php if ($days_since_hired <= 7): ?>
+                                    <br><small style="color: var(--success-color); font-weight: 500;">
+                                        <?php echo $days_since_hired == 0 ? 'Joined today!' : "Day $days_since_hired"; ?>
+                                    </small>
+                                <?php endif; ?>
                             </div>
                         </div>
                         
@@ -933,12 +1128,19 @@ $team_info = [
                                         Completed: <?php echo htmlspecialchars($activity['name']); ?>
                                     </div>
                                     <div class="activity-date">
-                                        <?php echo date('M j, Y - g:i A', strtotime($activity['date'])); ?>
+                                        <?php echo $activity['date'] ? date('M j, Y - g:i A', strtotime($activity['date'])) : 'Recently'; ?>
                                     </div>
                                 </div>
                             </li>
                         <?php endforeach; ?>
                     </ul>
+                </div>
+            </div>
+            <?php elseif ($days_since_hired <= 1): ?>
+            <div class="alert alert-info">
+                <span>🌟</span>
+                <div>
+                    <strong>Welcome!</strong> Once you start completing tasks and training, your recent activity will appear here.
                 </div>
             </div>
             <?php endif; ?>
@@ -951,18 +1153,34 @@ $team_info = [
             sidebar.classList.toggle('active');
         }
         
-        // Auto-hide alerts after 5 seconds
+        // Auto-hide alerts after 5 seconds (except for transition welcome)
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(function(alert) {
-                setTimeout(function() {
-                    alert.style.opacity = '0';
-                    alert.style.transform = 'translateY(-20px)';
+                if (!alert.classList.contains('transition-welcome')) {
                     setTimeout(function() {
-                        alert.remove();
-                    }, 300);
-                }, 5000);
+                        alert.style.opacity = '0';
+                        alert.style.transform = 'translateY(-20px)';
+                        setTimeout(function() {
+                            if (alert.parentNode) {
+                                alert.remove();
+                            }
+                        }, 300);
+                    }, 5000);
+                }
             });
+            
+            // Hide transition welcome message after 10 seconds
+            const transitionWelcome = document.querySelector('.transition-welcome');
+            if (transitionWelcome) {
+                setTimeout(function() {
+                    transitionWelcome.style.opacity = '0';
+                    transitionWelcome.style.transform = 'translateY(-20px)';
+                    setTimeout(function() {
+                        transitionWelcome.remove();
+                    }, 500);
+                }, 10000);
+            }
         });
         
         // Add hover effects to cards
@@ -977,6 +1195,21 @@ $team_info = [
                 });
             });
         });
+
+        // Check for role transitions every 5 minutes
+        setInterval(function() {
+            fetch('check-role-transition.php')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.role_changed && data.new_role !== 'employee') {
+                        // Role has changed, redirect
+                        window.location.href = data.redirect_url;
+                    }
+                })
+                .catch(error => {
+                    console.log('Role check failed:', error);
+                });
+        }, 300000); // 5 minutes
     </script>
 </body>
 </html>

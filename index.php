@@ -15,10 +15,10 @@ if (isLoggedIn()) {
             header('Location: employee-dashboard.php');
             break;
         case 'candidate':
-            header('Location: candidate-upload.php');
+            header('Location: candidate-dashboard.php');
             break;
         default:
-            header('Location: candidate-upload.php');
+            header('Location: candidate-dashboard.php');
     }
     exit;
 }
@@ -50,10 +50,10 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'login') {
                     header('Location: employee-dashboard.php');
                     break;
                 case 'candidate':
-                    header('Location: candidate-upload.php');
+                    header('Location: candidate-dashboard.php');
                     break;
                 default:
-                    header('Location: candidate-upload.php');
+                    header('Location: candidate-dashboard.php');
             }
             exit;
         } else {

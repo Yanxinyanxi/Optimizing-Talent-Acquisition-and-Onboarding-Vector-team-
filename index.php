@@ -218,7 +218,7 @@ if ($mode === 'reset' && isset($_GET['token']) && !isset($_POST['action'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kabel Talent Hub</title>
+    <title>Vector</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -656,7 +656,7 @@ if ($mode === 'reset' && isset($_GET['token']) && !isset($_POST['action'])) {
         <div class="auth-container">
             <div class="brand-section">
                 <div class="logo">V</div>
-                <h1 class="brand-title">Kabel Talent Hub</h1>
+                <h1 class="brand-title">Vector</h1>
                 <p class="brand-subtitle">Powered by Youth. Built for Speed.</p>
             </div>
 

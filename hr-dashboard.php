@@ -72,7 +72,7 @@ if ($_POST && isset($_POST['update_status'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HR Dashboard - Kabel HR System</title>
+    <title>HR Dashboard - Vector HR System</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -784,9 +784,9 @@ if ($_POST && isset($_POST['update_status'])) {
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <div class="logo">K</div>
-            <h3>Kabel HR System</h3>
-            <p>Talent Control Center</p>
+            <div class="logo">V</div>
+            <h3>HairCare2U</h3>
+            <p>HR Management System</p>
         </div>
         
         <ul class="sidebar-nav">
@@ -806,12 +806,6 @@ if ($_POST && isset($_POST['update_status'])) {
                 <a href="manage-jobs.php">
                     <span class="icon">💼</span>
                     <span>Job Positions</span>
-                </a>
-            </li>
-            <li>
-                <a href="employee-management.php">
-                    <span class="icon">👥</span>
-                    <span>Employees</span>
                 </a>
             </li>
             <li>
@@ -1014,7 +1008,7 @@ if ($_POST && isset($_POST['update_status'])) {
                                                     </form>
                                                     
                                                     <?php if (!empty($app['resume_filename'])): ?>
-                                                    <a href="uploads/resumes/<?php echo htmlspecialchars($app['resume_filename']); ?>" 
+                                                    <a href="#"
                                                        target="_blank" class="btn btn-outline" style="font-size: 0.8rem; padding: 0.5rem 0.75rem; width: 100%; margin-bottom: 0.5rem;">
                                                         📄 View Resume
                                                     </a>

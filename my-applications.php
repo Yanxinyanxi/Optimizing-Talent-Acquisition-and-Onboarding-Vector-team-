@@ -91,7 +91,7 @@ function getNextSteps($status) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kabel Talent Hub - My Applications</title>
+    <title>Vector - My Applications</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -589,8 +589,8 @@ function getNextSteps($status) {
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <div class="logo">K</div>
-            <h3>Kabel Talent Hub</h3>
+            <div class="logo">V</div>
+            <h3>Vector</h3>
             <p>Candidate Portal</p>
         </div>
         

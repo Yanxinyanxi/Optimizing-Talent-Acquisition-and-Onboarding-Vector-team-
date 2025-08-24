@@ -200,7 +200,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kabel Talent Hub - Resume Upload</title>
+    <title>Vector - Resume Upload</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -227,11 +227,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         .sidebar {
             width: 280px;
             background: linear-gradient(180deg, #2B4C8C 0%, #1e3a75 100%);
-            padding: 2rem 0;
+            padding: 2rem 0 0 0;
             box-shadow: 4px 0 20px rgba(0,0,0,0.1);
             position: fixed;
             height: 100vh;
             z-index: 1000;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
         }
         
         .sidebar-brand {
@@ -800,6 +803,44 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
         .mobile-toggle {
             display: none;
         }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--primary-color);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--secondary-color);
+        }
+
+        /* Custom Scrollbar for Sidebar */
+.sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    background: var(--primary-color); /* Orange color */
+    border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+    background: var(--secondary-color); /* Blue color */
+}
+
+
     </style>
 </head>
 <body>
@@ -808,8 +849,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['resume'])) {
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <div class="logo">K</div>
-            <h3>Kabel Talent Hub</h3>
+            <div class="logo">V</div>
+            <h3>Vector</h3>
             <p>Candidate Portal</p>
         </div>
         

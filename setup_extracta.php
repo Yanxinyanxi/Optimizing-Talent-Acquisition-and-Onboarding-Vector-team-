@@ -74,5 +74,5 @@ if (isset($result['error'])) {
 }
 
 echo "<hr style='margin: 30px 0;'>";
-echo "<p><a href='test_api.php'>🧪 Test API Integration</a> | <a href='candidate-upload.php'>📄 Upload Resume</a></p>";
+echo "<p><a href='test_api.php'>🧪 Test API Integration</a> | <a href='candidate-dashboard.php'>📄 Upload Resume</a></p>";
 ?>

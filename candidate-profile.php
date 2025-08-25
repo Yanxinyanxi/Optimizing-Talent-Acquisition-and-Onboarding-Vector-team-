@@ -153,7 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kabel Talent Hub - My Profile</title>
+    <title>Vector - My Profile</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -527,32 +527,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     <!-- Sidebar -->
     <div class="sidebar" id="sidebar">
         <div class="sidebar-brand">
-            <div class="logo">K</div>
-            <h3>Kabel Talent Hub</h3>
+            <div class="logo">V</div>
+            <h3>Vector</h3>
             <p>Candidate Portal</p>
         </div>
         
         <ul class="sidebar-nav">
             <li>
-                <a href="candidate-upload.php">
+                <a href="candidate-dashboard.php">
                     <span class="icon">📄</span>
                     <span>Upload Resume</span>
                 </a>
             </li>
             <li>
-                <a href="my-applications.php">
+                <a href="candidate-applications.php">
                     <span class="icon">📝</span>
                     <span>My Applications</span>
                 </a>
             </li>
             <li>
-                <a href="profile.php" class="active">
+                <a href="candidate-profile.php" class="active">
                     <span class="icon">👤</span>
                     <span>My Profile</span>
                 </a>
             </li>
             <li>
-                <a href="help.php">
+                <a href="candidate-help.php">
                     <span class="icon">❓</span>
                     <span>Help & Support</span>
                 </a>
@@ -577,7 +577,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         <div class="topbar">
             <h1 class="page-title">👤 My Profile</h1>
             <div class="topbar-actions">
-                <a href="my-applications.php" class="btn btn-secondary">
+                <a href="candidate-applications.php" class="btn btn-secondary">
                     📝 View Applications
                 </a>
             </div>
@@ -708,7 +708,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             <div style="font-size: 3rem; margin-bottom: 1rem;">📄</div>
                             <h3>No Resume Data Available</h3>
                             <p style="margin-bottom: 1.5rem;">Upload your resume to see your parsed information here.</p>
-                            <a href="candidate-upload.php" class="btn btn-primary">
+                            <a href="candidate-dashboard.php" class="btn btn-primary">
                                 📤 Upload Resume
                             </a>
                         </div>

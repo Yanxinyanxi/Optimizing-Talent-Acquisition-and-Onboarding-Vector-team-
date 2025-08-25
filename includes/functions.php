@@ -435,20 +435,9 @@ function getUserByUsername($username) {
     }
 }
 
-// Create new user
-function createUser($username, $password, $email, $full_name, $role = 'candidate') {
-    global $connection;
-    
-    try {
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = $connection->prepare("INSERT INTO users (username, password, email, full_name, role, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', NOW())");
-        $stmt->bind_param("sssss", $username, $hashed_password, $email, $full_name, $role);
-        return $stmt->execute();
-    } catch (Exception $e) {
-        error_log("Error creating user: " . $e->getMessage());
-        return false;
-    }
-}
+// REMOVED: createUser function - now using the one from auth.php
+// The createUser function is defined in auth.php with better parameters:
+// createUser($username, $email, $password, $full_name, $role = 'candidate', $department = null, $job_position_id = null)
 
 // Sanitize input
 function sanitizeInput($input) {

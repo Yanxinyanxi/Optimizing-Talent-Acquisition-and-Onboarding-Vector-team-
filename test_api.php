@@ -195,7 +195,7 @@ echo "</details>";
 echo "<hr style='margin: 30px 0;'>";
 echo "<p>";
 echo "<a href='setup_extracta.php'>🔧 Setup</a> | ";
-echo "<a href='candidate-upload.php'>📄 Upload Resume</a> | ";
+echo "<a href='candidate-dashboard.php'>📄 Upload Resume</a> | ";
 echo "<a href='hr-dashboard.php'>📊 Dashboard</a>";
 echo "</p>";
 ?>

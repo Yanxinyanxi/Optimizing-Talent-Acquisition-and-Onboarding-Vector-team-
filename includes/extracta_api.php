@@ -284,7 +284,7 @@ class ExtractaAPI {
     }
     
     /**
-     * Save parsed resume data to database
+     * Save parsed resume data to database (Clean version - no debug output)
      * @param array $parsed_data - Data from API (from the 'data' field of parseResume response)
      * @param string $original_filename - Original resume filename
      * @param object $db_connection - Database connection
@@ -292,35 +292,118 @@ class ExtractaAPI {
      */
     public function saveParsedData($parsed_data, $original_filename, $db_connection) {
         try {
-            // Extract personal_info object
-            $personal_info = isset($parsed_data['personal_info']) ? $parsed_data['personal_info'] : [];
+            // Log debug information to error log instead of displaying on screen
+            error_log("SaveParsedData - Filename: " . $original_filename);
+            error_log("SaveParsedData - Data keys: " . implode(', ', array_keys($parsed_data)));
             
-            // Extract personal information fields
-            $name = isset($personal_info['name']) ? $personal_info['name'] : '';
-            $email = isset($personal_info['email']) ? $personal_info['email'] : '';
-            $phone = isset($personal_info['phone']) ? $personal_info['phone'] : '';
-            $address = isset($personal_info['address']) ? $personal_info['address'] : '';
-            $linkedin = isset($personal_info['linkedin']) ? $personal_info['linkedin'] : '';
-            $github = isset($personal_info['github']) ? $personal_info['github'] : '';
+            // Check database connection
+            if (!$db_connection) {
+                error_log("SaveParsedData - Database connection is null");
+                return false;
+            }
             
-            // Extract array fields and convert to JSON
-            $work_experience = isset($parsed_data['work_experience']) ? json_encode($parsed_data['work_experience']) : '[]';
-            $education = isset($parsed_data['education']) ? json_encode($parsed_data['education']) : '[]';
-            $languages = isset($parsed_data['languages']) ? json_encode($parsed_data['languages']) : '[]';
-            $skills = isset($parsed_data['skills']) ? json_encode($parsed_data['skills']) : '[]';
-            $certificates = isset($parsed_data['certificates']) ? json_encode($parsed_data['certificates']) : '[]';
+            // Test database connection
+            if (!$db_connection->ping()) {
+                error_log("SaveParsedData - Database ping failed");
+                return false;
+            }
             
-            // Prepare SQL statement
-            $stmt = $db_connection->prepare("
-                INSERT INTO parsed_resumes 
-                (original_filename, name, email, phone, address, linkedin, github, 
-                 work_experience, education, languages, skills, certificates, raw_data, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
+            // Check if table exists
+            $table_check = $db_connection->query("SHOW TABLES LIKE 'parsed_resumes'");
+            if (!$table_check || $table_check->num_rows == 0) {
+                error_log("SaveParsedData - parsed_resumes table not found");
+                return false;
+            }
             
+            // Initialize default values
+            $name = '';
+            $email = '';
+            $phone = '';
+            $address = '';
+            $linkedin = '';
+            $github = '';
+            
+            // Extract personal_info (this is an object according to your Extracta.ai structure)
+            if (isset($parsed_data['personal_info']) && is_array($parsed_data['personal_info'])) {
+                $personal_info = $parsed_data['personal_info'];
+                $name = $personal_info['name'] ?? '';
+                $email = $personal_info['email'] ?? '';
+                $phone = $personal_info['phone'] ?? '';
+                $address = $personal_info['address'] ?? '';
+                $linkedin = $personal_info['linkedin'] ?? '';
+                $github = $personal_info['github'] ?? '';
+                
+                error_log("SaveParsedData - Personal info extracted - Name: " . $name . ", Email: " . $email);
+            }
+            
+            // Extract work_experience (list<object>)
+            $work_experience = '[]';
+            if (isset($parsed_data['work_experience']) && is_array($parsed_data['work_experience'])) {
+                $work_experience = json_encode($parsed_data['work_experience']);
+                error_log("SaveParsedData - Work Experience: " . count($parsed_data['work_experience']) . " entries");
+            }
+            
+            // Extract education (list<object>)
+            $education = '[]';
+            if (isset($parsed_data['education']) && is_array($parsed_data['education'])) {
+                $education = json_encode($parsed_data['education']);
+                error_log("SaveParsedData - Education: " . count($parsed_data['education']) . " entries");
+            }
+            
+            // Extract languages (list<object>) - note: your template shows "langauges" but I assume it's "languages"
+            $languages = '[]';
+            if (isset($parsed_data['languages']) && is_array($parsed_data['languages'])) {
+                $languages = json_encode($parsed_data['languages']);
+                error_log("SaveParsedData - Languages: " . count($parsed_data['languages']) . " entries");
+            } elseif (isset($parsed_data['langauges']) && is_array($parsed_data['langauges'])) {
+                // Handle potential typo in your extraction template
+                $languages = json_encode($parsed_data['langauges']);
+                error_log("SaveParsedData - Languages (langauges): " . count($parsed_data['langauges']) . " entries");
+            }
+            
+            // Extract skills (list<object>)
+            $skills = '[]';
+            if (isset($parsed_data['skills']) && is_array($parsed_data['skills'])) {
+                $skills = json_encode($parsed_data['skills']);
+                error_log("SaveParsedData - Skills: " . count($parsed_data['skills']) . " entries");
+            }
+            
+            // Extract certificates (list<object>)
+            $certificates = '[]';
+            if (isset($parsed_data['certificates']) && is_array($parsed_data['certificates'])) {
+                $certificates = json_encode($parsed_data['certificates']);
+                error_log("SaveParsedData - Certificates: " . count($parsed_data['certificates']) . " entries");
+            }
+            
+            // Create raw_data JSON
             $raw_data = json_encode($parsed_data);
             
-            $stmt->bind_param("sssssssssssss", 
+            // Check for JSON encoding errors
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                error_log("SaveParsedData - JSON encoding error: " . json_last_error_msg());
+                return false;
+            }
+            
+            // Check if raw_data is too large for database
+            if (strlen($raw_data) > 16777215) { // MEDIUMTEXT limit
+                error_log("SaveParsedData - Warning: Raw data is large (" . strlen($raw_data) . " chars)");
+            }
+            
+            // Prepare SQL statement (removed created_at as it has DEFAULT CURRENT_TIMESTAMP)
+            $sql = "INSERT INTO parsed_resumes 
+                    (original_filename, name, email, phone, address, linkedin, github, 
+                     work_experience, education, languages, skills, certificates, raw_data) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            
+            $stmt = $db_connection->prepare($sql);
+            
+            if (!$stmt) {
+                error_log("SaveParsedData - Prepare failed: " . $db_connection->error);
+                return false;
+            }
+            
+            // Bind parameters
+            $bind_result = $stmt->bind_param("sssssssssssss", 
                 $original_filename, 
                 $name, 
                 $email, 
@@ -336,10 +419,29 @@ class ExtractaAPI {
                 $raw_data
             );
             
-            return $stmt->execute();
+            if (!$bind_result) {
+                error_log("SaveParsedData - Bind failed: " . $stmt->error);
+                return false;
+            }
+            
+            // Execute the statement
+            $execute_result = $stmt->execute();
+            
+            if (!$execute_result) {
+                error_log("SaveParsedData - Execute failed: " . $stmt->error . " (Error Code: " . $stmt->errno . ")");
+                return false;
+            }
+            
+            $insert_id = $db_connection->insert_id;
+            error_log("SaveParsedData - Successfully inserted with ID: " . $insert_id);
+            
+            $stmt->close();
+            
+            return true;
             
         } catch (Exception $e) {
-            error_log("Error saving parsed data: " . $e->getMessage());
+            error_log("SaveParsedData - Exception: " . $e->getMessage());
+            error_log("SaveParsedData - Stack trace: " . $e->getTraceAsString());
             return false;
         }
     }

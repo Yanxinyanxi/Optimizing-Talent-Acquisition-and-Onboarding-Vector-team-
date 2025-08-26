@@ -27,9 +27,14 @@ $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $employee = $stmt->get_result()->fetch_assoc();
 
-// Get FAQ data
+// Define categories to hide from employee view
+$hidden_categories = ['general', 'greeting', 'company'];
+
+// Create the WHERE clause to exclude hidden categories
+$category_placeholders = str_repeat('?,', count($hidden_categories) - 1) . '?';
+
 try {
-    $stmt = $connection->query("
+    $stmt = $connection->prepare("
         SELECT 
             id,
             question,
@@ -38,9 +43,14 @@ try {
             keywords
         FROM chatbot_faq 
         WHERE is_active = 1 
+        AND category NOT IN ($category_placeholders)
         ORDER BY category, question
     ");
-    $faqs = $stmt->fetch_all(MYSQLI_ASSOC);
+    
+    // Bind the hidden categories as parameters
+    $stmt->bind_param(str_repeat('s', count($hidden_categories)), ...$hidden_categories);
+    $stmt->execute();
+    $faqs = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     
     // Group FAQs by category
     $faq_categories = [];

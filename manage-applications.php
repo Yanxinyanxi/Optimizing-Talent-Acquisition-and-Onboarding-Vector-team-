@@ -223,69 +223,68 @@ try {
     $job_positions = $stmt->fetch_all(MYSQLI_ASSOC);
     
     // Build query for applications with ranking
-    $query = "
-        SELECT 
-            a.id,
-            u.full_name as candidate_name,
-            u.email as candidate_email,
-            u.role as current_role,
-            u.department as current_department,
-            a.extracted_contact,
-            a.match_percentage,
-            a.extracted_skills,
-            a.extracted_experience,
-            a.extracted_education,
-            a.api_response as parsed_data,
-            a.resume_filename,
-            a.applied_at,
-            a.status,
-            a.hr_notes,
-            j.title as job_title,
-            j.department,
-            j.required_skills,
-            j.experience_level,
-            j.description as job_description,
-            ROW_NUMBER() OVER (ORDER BY a.match_percentage DESC, a.applied_at DESC) as ranking
-        FROM applications a
-        JOIN job_positions j ON a.job_position_id = j.id
-        JOIN users u ON a.candidate_id = u.id
-        WHERE 1=1
-    ";
+$query = "
+    SELECT 
+        a.id,
+        u.full_name as candidate_name,
+        u.email as candidate_email,
+        u.role as `current_role`,
+        u.department as current_department,
+        a.extracted_contact,
+        a.match_percentage,
+        a.extracted_skills,
+        a.extracted_experience,
+        a.extracted_education,
+        a.api_response as parsed_data,
+        a.resume_filename,
+        a.applied_at,
+        a.status,
+        a.hr_notes,
+        j.title as job_title,
+        j.department,
+        j.required_skills,
+        j.experience_level,
+        j.description as job_description,
+        ROW_NUMBER() OVER (ORDER BY a.match_percentage DESC, a.applied_at DESC) as ranking
+    FROM applications a
+    JOIN job_positions j ON a.job_position_id = j.id
+    JOIN users u ON a.candidate_id = u.id
+    WHERE 1=1
+";
 
     $params = [];
-    $types = '';
+$types = '';
 
-    if ($filter_job_id) {
-        $query .= " AND a.job_position_id = ?";
-        $params[] = $filter_job_id;
-        $types .= 'i';
-    }
+if ($filter_job_id) {
+    $query .= " AND a.job_position_id = ?";
+    $params[] = $filter_job_id;
+    $types .= 'i';
+}
 
-    // Apply status filter
-    if ($status_filter && $status_filter !== 'all') {
-        $query .= " AND a.status = ?";
-        $params[] = $status_filter;
-        $types .= 's';
-    }
+// Apply status filter
+if ($status_filter && $status_filter !== 'all') {
+    $query .= " AND a.status = ?";
+    $params[] = $status_filter;
+    $types .= 's';
+}
 
-    // Apply match percentage filter
-    switch($match_filter) {
-        case '90-100':
-            $query .= " AND a.match_percentage >= 90";
-            break;
-        case '70-89':
-            $query .= " AND a.match_percentage >= 70 AND a.match_percentage < 90";
-            break;
-        case '50-69':
-            $query .= " AND a.match_percentage >= 50 AND a.match_percentage < 70";
-            break;
-        case 'below-50':
-            $query .= " AND a.match_percentage < 50";
-            break;
-    }
+// Apply match percentage filter
+switch($match_filter) {
+    case '90-100':
+        $query .= " AND a.match_percentage >= 90";
+        break;
+    case '70-89':
+        $query .= " AND a.match_percentage >= 70 AND a.match_percentage < 90";
+        break;
+    case '50-69':
+        $query .= " AND a.match_percentage >= 50 AND a.match_percentage < 70";
+        break;
+    case 'below-50':
+        $query .= " AND a.match_percentage < 50";
+        break;
+}
 
-    $query .= " ORDER BY a.match_percentage DESC, a.applied_at DESC";
-
+$query .= " ORDER BY a.match_percentage DESC, a.applied_at DESC";
     if ($params) {
         $stmt = $connection->prepare($query);
         if ($stmt) {
@@ -1562,10 +1561,7 @@ function formatExtractedData($data, $limit = 5) {
                                                                     onclick="openStatusModal(<?php echo $app['id']; ?>, '<?php echo $currentStatus; ?>', '<?php echo addslashes($app['hr_notes'] ?? ''); ?>')">
                                                                 ✏️ Update
                                                             </button>
-                                                            <a href="view-application.php?id=<?php echo $app['id']; ?>" 
-                                                               class="btn btn-outline btn-xs">
-                                                                👁️ View
-                                                            </a>
+                                                            
                                                         </div>
                                                     </td>
                                                 </tr>

@@ -15,6 +15,25 @@ if (!isLoggedIn()) {
     exit;
 }
 
+$query = "
+    SELECT 
+        a.id,
+        u.full_name as candidate_name,
+        u.email as candidate_email,
+        a.match_percentage,
+        a.applied_at,
+        a.status,
+        a.hr_notes,
+        a.resume_filename,    -- Make sure this is included
+        a.resume_path,        -- Make sure this is included  
+        j.title as job_title,
+        j.department
+    FROM applications a
+    JOIN job_positions j ON a.job_position_id = j.id
+    JOIN users u ON a.candidate_id = u.id
+    WHERE 1=1
+";
+
 // Check database connection
 if (!isset($connection) || $connection->connect_error) {
     die("Database connection failed. Please check your database configuration.");
@@ -66,6 +85,7 @@ if ($_POST && isset($_POST['update_status'])) {
         $error = "Failed to update application status.";
     }
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1007,12 +1027,50 @@ if ($_POST && isset($_POST['update_status'])) {
                                                         <input type="hidden" name="update_status" value="1">
                                                     </form>
                                                     
-                                                    <?php if (!empty($app['resume_filename'])): ?>
-                                                    <a href="#"
-                                                       target="_blank" class="btn btn-outline" style="font-size: 0.8rem; padding: 0.5rem 0.75rem; width: 100%; margin-bottom: 0.5rem;">
-                                                        📄 View Resume
-                                                    </a>
-                                                    <?php endif; ?>
+<?php if (!empty($app['resume_filename'])): ?>
+    <?php 
+    // Try both possible paths
+    $resumePath1 = 'uploads/resumes/' . $app['resume_filename']; // Original filename path
+    $resumePath2 = !empty($app['resume_path']) ? $app['resume_path'] : null; // Stored path
+    
+    // Check which file actually exists
+    $workingPath = null;
+    if (!empty($resumePath2) && file_exists($resumePath2)) {
+        $workingPath = $resumePath2;
+    } elseif (file_exists($resumePath1)) {
+        $workingPath = $resumePath1;
+    }
+    
+    // Also try looking for the renamed file in the uploads directory
+    if (!$workingPath) {
+        $uploadDir = 'uploads/resumes/';
+        if (is_dir($uploadDir)) {
+            $files = scandir($uploadDir);
+            foreach ($files as $file) {
+                if ($file != '.' && $file != '..' && is_file($uploadDir . $file)) {
+                    // Check if this might be our file (you can add more logic here)
+                    $workingPath = $uploadDir . $file;
+                    break; // For now, just take the first file found
+                }
+            }
+        }
+    }
+    ?>
+    
+    <?php if ($workingPath): ?>
+    <a href="<?php echo htmlspecialchars($workingPath); ?>"
+       target="_blank" 
+       class="btn btn-outline" 
+       style="font-size: 0.8rem; padding: 0.5rem 0.75rem; width: 100%; margin-bottom: 0.5rem;">
+        📄 View Resume
+    </a>
+    <?php else: ?>
+    <span class="btn btn-outline" 
+          style="font-size: 0.8rem; padding: 0.5rem 0.75rem; width: 100%; margin-bottom: 0.5rem; opacity: 0.5; cursor: not-allowed;">
+        📄 Resume Not Found
+    </span>
+    <?php endif; ?>
+<?php endif; ?>
                                                     
                                                     <?php if (!empty($app['hr_notes'])): ?>
                                                         <div style="margin-top: 0.75rem; padding: 0.5rem; background: rgba(43, 76, 140, 0.05); border-radius: 8px; border-left: 3px solid var(--secondary-color);">
@@ -1159,19 +1217,350 @@ if ($_POST && isset($_POST['update_status'])) {
         }
         
         function exportApplications() {
-            // Implementation for export functionality
-            alert('Export functionality would be implemented here');
-        }
+    // Create CSV export of applications data
+    const applications = <?php echo json_encode($applications); ?>;
+    
+    if (!applications || applications.length === 0) {
+        alert('No application data available to export.');
+        return;
+    }
+    
+    // CSV headers
+    const headers = ['Candidate Name', 'Email', 'Job Title', 'Department', 'Match Percentage', 'Applied Date', 'Status', 'HR Notes'];
+    
+    // Build CSV content
+    let csvContent = headers.join(',') + '\n';
+    
+    applications.forEach(app => {
+        const row = [
+            `"${app.candidate_name || ''}"`,
+            `"${app.candidate_email || ''}"`,
+            `"${app.job_title || ''}"`,
+            `"${app.department || ''}"`,
+            `"${app.match_percentage || '0'}%"`,
+            `"${new Date(app.applied_at).toLocaleDateString()}"`,
+            `"${app.status ? app.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : ''}"`,
+            `"${(app.hr_notes || '').replace(/"/g, '""')}"`
+        ];
+        csvContent += row.join(',') + '\n';
+    });
+    
+    // Download CSV
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `applications_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function generateReport() {
+    // Generate comprehensive HTML report
+    const currentDate = new Date().toLocaleDateString();
+    const applications = <?php echo json_encode($applications); ?>;
+    const totalApps = <?php echo $total_applications; ?>;
+    const pendingApps = <?php echo $pending_applications; ?>;
+    const hiredCandidates = <?php echo $hired_candidates; ?>;
+    const activeEmployees = <?php echo $active_employees; ?>;
+    
+    // Calculate statistics
+    const statusCounts = {};
+    const departmentCounts = {};
+    let totalMatch = 0;
+    let matchCount = 0;
+    
+    applications.forEach(app => {
+        // Count by status
+        const status = app.status || 'unknown';
+        statusCounts[status] = (statusCounts[status] || 0) + 1;
         
-        function generateReport() {
-            // Implementation for report generation
-            alert('Report generation functionality would be implemented here');
-        }
+        // Count by department
+        const dept = app.department || 'unknown';
+        departmentCounts[dept] = (departmentCounts[dept] || 0) + 1;
         
-        function manageJobs() {
-            // Redirect to job management page
-            window.location.href = 'manage-jobs.php';
+        // Calculate average match
+        if (app.match_percentage && app.match_percentage > 0) {
+            totalMatch += parseFloat(app.match_percentage);
+            matchCount++;
         }
+    });
+    
+    const avgMatch = matchCount > 0 ? (totalMatch / matchCount).toFixed(1) : 0;
+    const hireRate = totalApps > 0 ? ((hiredCandidates / totalApps) * 100).toFixed(1) : 0;
+    
+    const reportHTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HairCare2U HR Analytics Report - ${currentDate}</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #FF6B35;
+        }
+        .header h1 {
+            color: #2B4C8C;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+        }
+        .header p {
+            color: #6c757d;
+            font-size: 1.1rem;
+        }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .metric-card {
+            background: linear-gradient(135deg, #FF6B35, #2B4C8C);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .metric-number {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .metric-label {
+            font-size: 1rem;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .section h2 {
+            color: #2B4C8C;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #FF6B35;
+            font-size: 1.8rem;
+        }
+        .chart-container {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th {
+            background: linear-gradient(135deg, #2B4C8C, #1e3a75);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.9rem;
+            letter-spacing: 0.5px;
+        }
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+        tr:hover {
+            background: rgba(255, 107, 53, 0.1);
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-pending { background: rgba(255, 193, 7, 0.2); color: #856404; }
+        .status-selected { background: rgba(40, 167, 69, 0.2); color: #155724; }
+        .status-rejected { background: rgba(220, 53, 69, 0.2); color: #721c24; }
+        .status-hired { background: rgba(102, 16, 242, 0.2); color: #5a1a6b; }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+            color: #6c757d;
+        }
+        @media print {
+            body { background: white; }
+            .container { box-shadow: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 HairCare2U HR Analytics Report</h1>
+            <p>Comprehensive Hiring and Employee Management Analysis</p>
+            <p><strong>Report Generated:</strong> ${currentDate}</p>
+        </div>
+
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-number">${totalApps}</div>
+                <div class="metric-label">Total Applications</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-number">${pendingApps}</div>
+                <div class="metric-label">Pending Review</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-number">${hiredCandidates}</div>
+                <div class="metric-label">Successful Hires</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-number">${activeEmployees}</div>
+                <div class="metric-label">Active Employees</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>📈 Key Performance Indicators</h2>
+            <div class="chart-container">
+                <p><strong>Average Match Score:</strong> ${avgMatch}%</p>
+                <p><strong>Overall Hire Rate:</strong> ${hireRate}%</p>
+                <p><strong>Applications This Month:</strong> ${applications.filter(app => new Date(app.applied_at).getMonth() === new Date().getMonth()).length}</p>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>📊 Application Status Breakdown</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>Count</th>
+                        <th>Percentage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${Object.entries(statusCounts).map(([status, count]) => `
+                        <tr>
+                            <td><span class="status-badge status-${status}">${status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span></td>
+                            <td>${count}</td>
+                            <td>${totalApps > 0 ? ((count / totalApps) * 100).toFixed(1) : 0}%</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>🏢 Department Analysis</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Department</th>
+                        <th>Applications</th>
+                        <th>Percentage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${Object.entries(departmentCounts).map(([dept, count]) => `
+                        <tr>
+                            <td>${dept}</td>
+                            <td>${count}</td>
+                            <td>${totalApps > 0 ? ((count / totalApps) * 100).toFixed(1) : 0}%</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>🎯 Recent Applications</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Candidate</th>
+                        <th>Position</th>
+                        <th>Match Score</th>
+                        <th>Applied Date</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${applications.slice(0, 10).map(app => `
+                        <tr>
+                            <td>${app.candidate_name || 'N/A'}</td>
+                            <td>${app.job_title || 'N/A'}</td>
+                            <td>${app.match_percentage || 0}%</td>
+                            <td>${new Date(app.applied_at).toLocaleDateString()}</td>
+                            <td><span class="status-badge status-${app.status || 'unknown'}">${(app.status || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</span></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="footer">
+            <p>© ${new Date().getFullYear()} HairCare2U HR Management System</p>
+            <p>This report was automatically generated by the Vector HR System</p>
+        </div>
+    </div>
+</body>
+</html>`;
+
+    // Create and download the report
+    const blob = new Blob([reportHTML], { type: 'text/html;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `HR_Analytics_Report_${new Date().toISOString().slice(0, 10)}.html`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function manageJobs() {
+    // Show loading state
+    const btn = event.target;
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '⏳ Loading...';
+    btn.disabled = true;
+    
+    // Redirect to job management page
+    window.location.href = 'manage-jobs.php';
+}
         
         // Auto-hide alerts after 5 seconds
         setTimeout(() => {

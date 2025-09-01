@@ -66,6 +66,15 @@ We propose an **AI-driven HR platform** that streamlines hiring and onboarding f
 
 Our website runs on **PHP + MySQL (XAMPP)** with a **vanilla HTML/CSS/JS frontend**, and integrates with **Extracta.ai** and **OpenAI GPT-4o APIs**.
 
+# Setup Instruction
+_Below is the instructions on installing and setting up Vector:_
+
+1. Download & install Visual Studio Code (as code editor)
+2. Download & install XAMPP
+   -Install it and start the **Apache** and **MySQL** services from the XAMPP control panel.
+3. Clone the repository
+   -git clone 
+
 # Reflection on challenges and learnings
 
 During the development of this solution, we encountered **several challenges** that shaped our learning experience:

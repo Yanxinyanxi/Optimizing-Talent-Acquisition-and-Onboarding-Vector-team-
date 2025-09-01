@@ -71,9 +71,52 @@ _Below is the instructions on installing and setting up Vector:_
 
 1. Download & install Visual Studio Code (as code editor)
 2. Download & install XAMPP
-   -Install it and start the **Apache** and **MySQL** services from the XAMPP control panel.
+   - Install it and start the **Apache** and **MySQL** services from the XAMPP control panel.
 3. Clone the repository
-   -git clone 
+   - git clone https://github.com/Yanxinyanxi/Optimizing-Talent-Acquisition-and-Onboarding-Vector-team-.git
+4. Database setup
+   
+   a. Open http://localhost/phpmyadmin in your browser.
+
+   b. Go to **Import** tab → upload vector_talent_acquisition (found in repo - SQL).
+
+5. Setup Extracta.ai Account (for resume parsing)
+
+   a. Go to extracta.ai in your browser → sign up an account.
+   
+   b. Log in → **Data Extraction** → **Create new extraction**
+
+   c. Choose **Resume/CV** template → fill in details → select **Multiple Pages** for Document Options.
+
+   d. Add two new child for **LinkedIn** and **GitHub** in Key 1 (Personal info) → skip 
+6. Implement the API key of Extracta.ai
+
+   a. Go to VS code → clone the repository → select **Includes** folder → **config.php**
+   
+   a. Copy API key from the dashboard (Extracta.ai) → replace it in line 9.
+
+   b. Copy the Extraction ID of the project created (Extracta.ai) → replace it in line 10.
+
+   c. Save.
+7. Setup Chatbot API
+   
+   a. Create the personal access token
+   -  Go to https://github.com/settings/tokens
+   -  Click "Generate new token (classic)".
+   -  Select scopes: repo, workflow, read:org (in admin:org).
+   -  Copy and save the token securely.
+     
+   b. Setup local environment
+   - Add a new file in VS code → rename it as ".env".
+   - replace the personal access token in .env file to your personal access token in this formet: GITHUB_API_TOKEN=_your personal access token_
+   - Save.
+
+   c. Install the "AI Toolkit" extension in VS Code (automatically detect GitHub token).
+8. Run the Website
+   
+   a. Make sure **Apache** and **MySQL** are running in XAMPP.
+
+   b. Open Browser and go to: http://localhost/Optimizing-Talent-Acquisition-and-Onboarding-Vector-team--main/
 
 # Reflection on challenges and learnings
 

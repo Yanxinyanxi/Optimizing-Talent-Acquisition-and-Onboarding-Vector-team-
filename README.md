@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="vector-team.jpeg" alt="vector" width="600">
+</p>
+
+# 
 ## Table of Contents
 <details>
   <summary>Table of Contents</summary>

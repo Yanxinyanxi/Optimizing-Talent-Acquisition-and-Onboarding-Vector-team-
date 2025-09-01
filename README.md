@@ -32,6 +32,8 @@
 
 # Problem and Solution Summary
 ## Problem Statement:
+**Optimizing Talent Acquisition and Onboarding**
+
 **Use Case - HairCare2u**
 
 Hiring and onboarding new talent, especially for specialized roles, is a time-consuming and inefficient process for SMEs like HairCare2U. As a growing business in the haircare and beauty retail sector, HairCare2U is expanding its digital operations and requires new hires across both technical and non-technical roles. However, the HR team faces **two major challenges**:

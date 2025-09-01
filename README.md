@@ -130,7 +130,7 @@ _Below is the instructions on installing and setting up Vector:_
    -  Copy and save the token securely.
      
    b. Setup local environment
-   - Add a new file in VS code → rename it as ".env".
+   - Add a new file in VS code in project root folder → rename it as ".env".
    - replace the personal access token in .env file to your personal access token in this formet: GITHUB_API_TOKEN=_your personal access token_
    - Save.
 

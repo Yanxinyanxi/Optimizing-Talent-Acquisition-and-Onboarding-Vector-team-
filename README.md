@@ -21,7 +21,7 @@
 
 
 # Optimizing-Talent-Acquisition-and-Onboarding-Vector-team-
-**Project Title:** Vector
+**Project Title:** Vector HR Platform
 
 **Vectorian:**
 1) Tang Yen Sin (Team Leader)

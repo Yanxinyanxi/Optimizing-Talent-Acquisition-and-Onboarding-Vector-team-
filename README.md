@@ -1,4 +1,19 @@
-[Team member list](#Vectorian)
+## Table of Contents
+<details>
+  <summary>Table of Contents</summary>
+   
+1. [Project Title & Team Member](#optimizing-talent-acquisition-and-onboarding-vector-team-)
+2. [Problem and Solution](#problem-and-solution-summary)
+   - [Problem Statement](#problem-statement)
+   - [Solution](#solution)
+   - [Impact](#impact)
+3. [Technology Stack Used](#technology-stack-used)
+4. [Setup Instruction](#setup-instruction)
+5. [Reflection on challenges and learnings](#reflection-on-challenges-and-learnings)
+   - [Key Challenges](#key-challenges)
+   - [Key Learnings](#key-learnings)
+</details>
+
 
 # Optimizing-Talent-Acquisition-and-Onboarding-Vector-team-
 **Project Title:** Optimizing Talent Acquisition and Onboarding
@@ -124,7 +139,7 @@ _Below is the instructions on installing and setting up Vector:_
    http://localhost/Optimizing-Talent-Acquisition-and-Onboarding-Vector-team--main/
 
 # Reflection on challenges and learnings
-
+## Key Challenges
 During the development of this solution, we encountered **several challenges** that shaped our learning experience:
 
 - **Understanding SME Pain Points** – It was challenging to balance the unique needs of SMEs like HairCare2U, which require both technical recruitment (e.g., Data Analysts) and non-technical recruitment (e.g., Product Specialists). We learned the importance of tailoring tools to support diverse hiring scenarios.

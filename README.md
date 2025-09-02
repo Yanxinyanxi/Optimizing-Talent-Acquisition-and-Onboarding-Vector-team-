@@ -133,7 +133,7 @@ _Below is the instructions on installing and setting up Vector:_
      
    b. Setup local environment
    - Add a new file in VS code in project root folder → rename it as ".env".
-   - replace the personal access token in .env file to your personal access token in this formet: GITHUB_API_TOKEN=_your personal access token_
+   - replace the personal access token in .env file to your personal access token in this format: GITHUB_API_TOKEN=_your personal access token_
    - Save.
 
    c. Install the "AI Toolkit" extension in VS Code (automatically detect GitHub token).
